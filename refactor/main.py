@@ -21,6 +21,11 @@ from step_00_validate_raw import validate_raw
 from step_01_validate_values import validate_values
 from step_02_apply_calendar import apply_calendar
 from step_03_fine_table import build_fine_table
+from step_04_forecast_units import build_forecast_units
+from step_05_lookups import build_lookups
+from step_06_series_routes import build_series_routes
+from step_07_support_bound import build_support_bound
+from step_08_rate_series import build_rate_series
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -74,6 +79,9 @@ def kamelot_configuration() -> Config:
                                      "no_instalado": "negative", "autorenew": "positive"},
         extra_renovacion=["net_new"],                   # [por confirmar] + the channel column, if any
         extra_revalorizacion=["discount_interval"],     # [por confirmar] the discount bucket
+        # uplift cells on the dims that move the price: the 10 mandatory dims made 26,090
+        # cells in Kamelot, 70 % of them under the floor (decision of the reference)
+        uplift_mandatory_dims=["regional_level_1", "product_level_1", "purchase_type", "term_level_2"],
         # the other columns of the extract
         extra_measure_cols=["total_reacquired_units", "total_reacquired_usd", "TR_AUV", "REN_AUV", "ReAC_AUV"],
         discount_value_column="discount",               # [por confirmar]
@@ -117,7 +125,13 @@ def run(configuration: Config) -> dict:
     validated_raw = validate_values(validated_raw, configuration)        # step 01
     calendared_raw = apply_calendar(validated_raw, configuration)        # step 02
     fine_table = build_fine_table(calendared_raw, configuration)         # step 03
-    return dict(raw=calendared_raw, fine_table=fine_table)
+    forecast_units = build_forecast_units(fine_table, configuration)     # step 04
+    lookups = build_lookups(fine_table, forecast_units, configuration)   # step 05
+    series_table = build_series_routes(forecast_units, configuration)    # step 06
+    support_bound = build_support_bound(forecast_units, configuration)   # step 07
+    rated_units, series_rate = build_rate_series(forecast_units, series_table, configuration)   # step 08
+    return dict(raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
+                series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
 
 
 if __name__ == "__main__":

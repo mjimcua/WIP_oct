@@ -1,7 +1,7 @@
 """
 config.py — The configuration of SFF (mirror version, grown step by step).
 
-What it holds today (steps 00 to 03):
+What it holds (grows with the steps that need it):
   · THE COLUMN CONTRACT: which role every column of the raw plays. A column has one
     role (the two extra groups may share a column); the raw may not carry a column
     with no role, nor miss a declared one.
@@ -16,8 +16,9 @@ What it holds today (steps 00 to 03):
       configuration.log_check_summary()   the count of the checks; stops if any FAILED
       configuration.logger.doc(...)       any explanation or summary line        (blue)
       configuration.show_table(...)       concrete rows, as a pandas table (never logged)
-  · THE IDS AND KEYS: how a row names its series, its forecast unit and its
-    revaluation combination (joined text ids), and their keys (a hash of each id).
+  · THE IDS AND KEYS: how a row names its rate series, its forecast unit and its
+    uplift cell (joined text ids), and their keys (a hash of each id).
+  · THE STATISTICAL PARAMETERS: the z of the bands and the support floor.
   · THE TABLES: where they are written (a SQL engine, or CSV files when there is none).
     Every table is read back after writing and its row count checked.
 
@@ -61,10 +62,10 @@ COLUMN_ROLE_IGNORE = "ignore"
 # The name of the framework's logger (a named logger: other libraries keep their own).
 LOGGER_NAME = "sff"
 
-# How the ids are built: fields joined with "|"; a unit and its combination with "||".
+# How the ids are built: fields joined with "|"; a unit and its revaluation values with "||".
 ID_FIELD_SEPARATOR = "|"
 COMBINED_ID_SEPARATOR = "||"
-NO_COMBINATION_ID = "na"          # the combination id when no extra_revalorizacion is declared
+NO_REVALUATION_VALUES = "na"      # the revaluation part of a fine row when no extra_revalorizacion is declared
 HASH_HEX_DIGITS = 12              # 48 bits: fits a SQL bigint
 
 # The status of a check, and the level it is logged at.
@@ -72,6 +73,9 @@ STATUS_OK, STATUS_WARNING, STATUS_FAILED, STATUS_NOT_EVALUATED = "ok", "WARN", "
 LOG_LEVEL_BY_STATUS = {STATUS_OK: logging.INFO, STATUS_WARNING: logging.WARNING,
                        STATUS_FAILED: logging.ERROR, STATUS_NOT_EVALUATED: logging.WARNING}
 EXAMPLE_ROWS_SHOWN = 3      # example rows shown under a check
+
+# The values that mean "this flag is on" in a timevarying column or the time_series flag.
+ACTIVE_FLAG_VALUES = (1, True, "1")
 
 # A timevarying column rotates towards churn (negative) or towards renewal (positive).
 VALID_TIMEVARYING_SIGNS = ("negative", "positive")
@@ -147,6 +151,7 @@ class Config:
     extra_renovacion: list = field(default_factory=list)              # enter the rate series only
     extra_revalorizacion: list = field(default_factory=list)          # enter the uplift cell only
 
+    uplift_mandatory_dims: Optional[list] = None      # mandatory dims of the uplift cell; None = all of them
     discount_value_column: Optional[str] = None   # the exact discount (formula input, never a dimension)
     sku_column: Optional[str] = None              # the SKU (formula input for the price scenarios)
     ignore_cols: list = field(default_factory=list)   # read by nobody; may be absent from the raw
@@ -155,6 +160,11 @@ class Config:
     current_month: Optional[str] = None   # first month of the future; no default on purpose
     test_months: int = 3                  # closed months before it that only evaluate
     pending_close_months: int = 0         # months before the exam not closed yet (0 = all closed)
+
+    # ─── statistical parameters ────────────────────────────────────────────────────
+    z: float = 1.645                      # 90 % two-sided: every band and every binomial error uses it
+    support_floor: float = 30.0           # contracts in a typical month below which a series' own rate
+                                          # moves ±15 pp by chance (90 %, p = 0.5): it will borrow support
 
     # ─── where the tables are written ───────────────────────────────────────────────
     sql_engine: Optional[object] = None   # a SQLAlchemy engine; None → CSV files in output_folder
@@ -190,8 +200,13 @@ class Config:
         if invalid_signs:
             raise ValueError(f"timevarying signs must be one of {VALID_TIMEVARYING_SIGNS}: {invalid_signs}")
 
-        # [2] no column declared with two roles (built and checked by column_roles)
+        # [2] no column declared with two roles (built and checked by column_roles), and
+        #     the uplift cell takes its mandatory dims from the declared ones
         self.column_roles()
+        unknown_uplift_dims = [column_name for column_name in (self.uplift_mandatory_dims or [])
+                               if column_name not in self.business_mandatory_dims]
+        if unknown_uplift_dims:
+            raise ValueError(f"uplift_mandatory_dims must be mandatory dims: {unknown_uplift_dims}")
 
         # [3] the calendar parameters are well formed
         if self.current_month is not None:
@@ -275,9 +290,18 @@ class Config:
         The physical name is table_prefix + table_name. With an engine the table is
         replaced in SQL (schema sql_schema); without one it is a CSV in output_folder.
         Monthly Periods are written as text ("2026-09"). The check fails if the rows read
-        back are not the rows written.
+        back are not the rows written. If a blocking check of the step has already failed,
+        nothing is written and the write is logged as not evaluated.
         """
         physical_name = f"{self.table_prefix}{table_name}"
+
+        # a table built from data that already failed a blocking check is not written:
+        # it would replace a good table with a wrong one, and it costs time for nothing
+        if any(logged[0] == STATUS_FAILED for logged in check_log):
+            self.log_not_evaluated(step_label, check_log, f"table {physical_name} written and read back",
+                                   "not written: an earlier check of this step failed")
+            return
+
         persisted_frame = frame.copy()
         for column_name in persisted_frame.columns:
             if isinstance(persisted_frame[column_name].dtype, pd.PeriodDtype):
@@ -322,6 +346,13 @@ class Config:
         extra_renovacion, in this order (the field order of fs_id and fu_id)."""
         return (self.business_mandatory_dims + list(self.structural_timevarying_dims)
                 + self.extra_renovacion)
+
+    @property
+    def uplift_cell_columns(self) -> list:
+        """The columns of ONE uplift cell (the price context): the uplift mandatory dims
+        (all mandatory unless uplift_mandatory_dims says fewer) + extra_revalorizacion."""
+        uplift_mandatory = self.uplift_mandatory_dims if self.uplift_mandatory_dims is not None else self.business_mandatory_dims
+        return list(uplift_mandatory) + self.extra_revalorizacion
 
     @property
     def core_measures(self) -> list:

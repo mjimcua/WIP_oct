@@ -46,7 +46,7 @@ import pandas as pd
 
 from config import Config
 from vocabulario import (CALENDAR_ROLE_COLUMN, CURRENT_MONTH_COLUMN, ROLE_PENDING, ROLE_PROJECTION,
-                         ROLE_TEST, ROLE_TRAIN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
+                         ROLE_TEST, ROLE_TRAIN, ROLES_IN_ORDER, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
                          TABLE_CALENDAR)
 
 
@@ -68,7 +68,6 @@ STEP_OUTPUT = ("the raw with four new columns (rol, es_mes_en_curso, s0_renovado
                "table sff_calendario (one row per month)")
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-ROLES_IN_ORDER = [ROLE_TRAIN, ROLE_TEST, ROLE_PENDING, ROLE_PROJECTION]
 # Below a year of training months no seasonal pattern can be learned.
 MIN_TRAINING_MONTHS = 12
 # Money must be conserved to the cent when nothing is supposed to change it.
