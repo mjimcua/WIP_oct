@@ -12,12 +12,15 @@ with three changes:
 It is called from one place only: Config.__post_init__.
 
 Levels used by the steps:
-    INFO     (green)   a check that passed · the purpose and the numbers of a step
+    DOC      (blue)    documentation: step titles, purposes, explanations, summaries
+    INFO     (green)   a check that passed
     WARNING  (yellow)  a check that failed without blocking · a check not evaluated
     ERROR    (red)     a check that failed and blocks the run
+DOC is a level of its own (21, between INFO and WARNING): `logger.doc(message)`.
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
+import functools
 import logging
 import sys
 from typing import Dict, Optional
@@ -26,11 +29,17 @@ from colorama import Back, Fore, Style
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
+# The documentation level: shown at INFO, hidden at WARNING, blue.
+DOC_LEVEL = 21
+DOC_LEVEL_NAME = "DOC"
+logging.addLevelName(DOC_LEVEL, DOC_LEVEL_NAME)
+
 VALID_LOG_LEVELS = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET", 50, 40, 30, 20, 10, 0]
 LOG_FORMAT = "{color}{asctime} | {message}{reset}"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 LEVEL_COLORS = {
     "DEBUG": Fore.BLUE,
+    "DOC": Fore.BLUE,
     "INFO": Fore.GREEN,
     "WARNING": Fore.YELLOW,
     "ERROR": Fore.RED,
@@ -90,4 +99,5 @@ class LoggerManager:
             logger.addHandler(file_handler)
         logger.setLevel(self.log_level)
         logger.propagate = logger_name is None     # a named logger does not repeat its lines through the root
+        logger.doc = functools.partial(logger.log, DOC_LEVEL)     # logger.doc("...") → blue
         return logger
