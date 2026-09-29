@@ -1,12 +1,15 @@
 """
 config.py — The configuration of SFF (mirror version, grown step by step).
 
-What it holds today (step 00):
+What it holds today (steps 00 and 01):
   · THE COLUMN CONTRACT: which role every column of the raw plays. A column has one
     role (the two extra groups may share a column); the raw may not carry a column
     with no role, nor miss a declared one.
   · THE CALENDAR: the current month and the number of exam months. The role of every
     month is generated from them; the raw's own role columns are never read.
+
+  · THE LOG: level, colours and an optional file. The logger is configured once, when
+    the Config is built, and every step logs through `configuration.logger`.
 
 What it does not hold yet: parameters of later steps, keys and ids, persistence. Each
 arrives with the step that needs it.
@@ -16,6 +19,7 @@ Usage: subclass Config in main.py, override `read_raw()` and declare the columns
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
 import datetime
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -23,6 +27,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from logging_helpers import LoggerManager
 from vocabulario import ROLE_PENDING, ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN
 
 
@@ -38,6 +43,9 @@ COLUMN_ROLE_EXTRA_REVALORIZACION = "extra_revalorizacion"
 COLUMN_ROLE_BOTH_EXTRAS = "extra_renovacion+extra_revalorizacion"
 COLUMN_ROLE_FORMULA_INPUT = "formula_input"
 COLUMN_ROLE_IGNORE = "ignore"
+
+# The name of the framework's logger (a named logger: other libraries keep their own).
+LOGGER_NAME = "sff"
 
 # A timevarying column rotates towards churn (negative) or towards renewal (positive).
 VALID_TIMEVARYING_SIGNS = ("negative", "positive")
@@ -97,6 +105,11 @@ class Config:
     test_months: int = 3                  # closed months before it that only evaluate
     pending_close_months: int = 0         # months before the exam not closed yet (0 = all closed)
 
+    # ─── the log (configured once, when the Config is built) ────────────────────────
+    log_level: str = "INFO"               # DEBUG · INFO · WARNING · ERROR
+    log_colors: bool = True               # colours on the console (off in tests)
+    log_file: Optional[str] = None        # also write the log to this file, without colours
+
     # ═══════════════════════════════════════════════════════════════════════════════
     # THE RAW SOURCE
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -110,7 +123,10 @@ class Config:
     # ═══════════════════════════════════════════════════════════════════════════════
 
     def __post_init__(self) -> None:
-        """A misdeclared Config stops here, before any data is read."""
+        """The logger is configured, and a misdeclared Config stops here, before any data is read."""
+        # [0] the log: one configuration for the whole run
+        LoggerManager(self.log_level, use_colors=self.log_colors, log_file=self.log_file).get_logger_configured(LOGGER_NAME)
+
         # [1] every timevarying column carries a valid sign
         invalid_signs = {column_name: sign for column_name, sign in self.structural_timevarying_dims.items()
                          if sign not in VALID_TIMEVARYING_SIGNS}
@@ -127,6 +143,11 @@ class Config:
             raise ValueError(f"test_months must be at least 1 (found {self.test_months}): without an exam nothing is evaluated")
         if int(self.pending_close_months) < 0:
             raise ValueError(f"pending_close_months cannot be negative (found {self.pending_close_months})")
+
+    @property
+    def logger(self) -> logging.Logger:
+        """The framework's logger: every step logs through it."""
+        return logging.getLogger(LOGGER_NAME)
 
     @property
     def core_measures(self) -> list:

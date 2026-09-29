@@ -5,7 +5,7 @@ main.py — Runs SFF on Kamelot, or on the synthetic raw.
     python main.py sintetico    # the synthetic raw of the tests
 
 The Config is declared here and only here: its columns, its calendar and where the raw
-comes from. Today it runs step 00 (validate the raw); each new step adds one line to run().
+comes from. Each step adds one line to run().
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
@@ -16,6 +16,7 @@ from sqlalchemy import create_engine
 
 from config import Config
 from step_00_validate_raw import validate_raw
+from step_01_validate_values import validate_values
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ def run(configuration: Config) -> dict:
     """The steps, in order. Each step adds its line here when it is built."""
     raw = configuration.read_raw()
     validated_raw = validate_raw(raw, configuration)                     # step 00
+    validated_raw = validate_values(validated_raw, configuration)        # step 01
     return dict(raw=validated_raw)
 
 
