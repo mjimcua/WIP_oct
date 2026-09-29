@@ -101,3 +101,10 @@ TABLE_RELATIVES = "parientes"                 # step 10: every series × rung: i
 TABLE_POOLS = "pools"                         # step 10: every pattern: its support and its rate
 TABLE_SERIES_ESTIMATE = "series_estimacion"   # step 11: every series: its chosen relative, rate, errors, level
 TABLE_RISK_LEVELS = "niveles_riesgo"          # step 11: money by risk level
+
+# ─── the core table (built last, grows with every step) ──────────────────────────
+TABLE_CORE = "nucleo"                         # ONE wide table at the fine grain: history and gaps (the future later)
+TABLE_CORE_LEGEND = "nucleo_leyenda"          # every column of the core: its step, its level and how to aggregate it
+ROW_ORIGIN_COLUMN = "origen_fila"             # where the row comes from
+ROW_FROM_RAW = "raw"                          # a row of the extract
+ROW_FROM_GAP = "hueco"                        # a month with no expirations inside the history of a series (step 08)

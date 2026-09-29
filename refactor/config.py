@@ -217,6 +217,21 @@ class Config:
     own_level_min_history_months: int = 12    # a full year to be level A (a seasonal series has seen every season)
     signed_ladder_max_loss: float = 0.05  # a signed series may collapse mandatory dims (sign kept) while the cumulative
                                           # R² lost (step 09) stays ≤ this; 0 = its ladder ends at the cell × sign
+    # ─── the dynamics of the rate (step 13): descriptive, it does NOT restrict any technique ───
+    dynamics_min_months: int = 24         # months a pool needs to measure its month effect (two of each month)
+    dynamics_significance: float = 0.05   # a month effect or a trend is declared when its p-value is below this
+    # ─── the backtest of the rate (step 14) ───
+    challenger_technique: str = "T3_ma3"  # the technique to beat: the moving average of 3 months (what a spreadsheet does)
+    backtest_selection_months: int = 6    # closed months BEFORE the exam used as targets to CHOOSE the technique
+    backtest_horizons: list = field(default_factory=lambda: [1, 6])   # months ahead judged: next month, and six months
+    horizon_bands: dict = field(default_factory=lambda: {"corto": [1, 1], "medio_largo": [2, 6]})   # a horizon between
+                                          # two judged ones takes the band of the judged one above it (the wider)
+    challenger_margin_by_band: dict = field(default_factory=lambda: {"corto": 0.10, "medio_largo": 0.0})  # how much a
+                                          # technique must beat the challenger (in |error| / binomial error) to replace it
+    backtest_min_history_months: int = 12 # months a technique must see before predicting (every technique can compete)
+    backtest_min_predictions: int = 3     # predictions a technique needs in a band to be chosen
+    band_low_quantile: float = 0.05       # the error band: 5 % and 95 % quantiles of the normalised error (90 %)
+    band_high_quantile: float = 0.95
 
     # ─── where the tables are written ───────────────────────────────────────────────
     sql_engine: Optional[object] = None   # a SQLAlchemy engine; None → CSV files in output_folder
@@ -243,8 +258,10 @@ class Config:
 
     def __post_init__(self) -> None:
         """The logger is configured, and a misdeclared Config stops here, before any data is read."""
-        # [0] the log: one configuration for the whole run
+        # [0] the log: one configuration for the whole run; the count of the checks of every
+        #     step is kept for the report
         LoggerManager(self.log_level, use_colors=self.log_colors, log_file=self.log_file).get_logger_configured(LOGGER_NAME)
+        self.check_history = []
 
         # [1] every timevarying column carries a valid sign
         invalid_signs = {column_name: sign for column_name, sign in self.structural_timevarying_dims.items()
@@ -323,6 +340,11 @@ class Config:
         ValueError naming the failed checks if any FAILED."""
         counts = {status: sum(1 for logged in check_log if logged[0] == status)
                   for status in (STATUS_OK, STATUS_WARNING, STATUS_FAILED, STATUS_NOT_EVALUATED)}
+        self.check_history.append({"paso": step_label, "nombre": step_name, "comprobaciones": len(check_log),
+                                   "ok": counts[STATUS_OK], "avisos": counts[STATUS_WARNING],
+                                   "fallos": counts[STATUS_FAILED], "no_evaluadas": counts[STATUS_NOT_EVALUATED],
+                                   "avisos_detalle": " · ".join(description for status, description, _ in check_log
+                                                                if status in (STATUS_WARNING, STATUS_FAILED))})
         if counts[STATUS_FAILED]:
             summary_level = logging.ERROR
         elif counts[STATUS_WARNING] or counts[STATUS_NOT_EVALUATED]:

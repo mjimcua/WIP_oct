@@ -1,0 +1,368 @@
+"""
+step_informe.py — The report: what the raw was, how it was improved, and how well the
+framework predicts the renewal rate. And the card of every series.
+
+It reads the results of every step that has run and writes, in the output folder, the
+markdown report informe_sff.md with these chapters:
+  1. The raw and how it was improved: the extract, the checks of every step, what was
+     corrected (null renewals, early results of the future, the discount), the grain.
+  2. The gaps filled: months with nothing due inside the history of a series.
+  3. The binomial support, before and after the ladder: how much money had a precise rate
+     on its own, and how much has it now; the error of the estimate before and after.
+  4. The dynamics of the rate: the portfolio's month profile and the pools' attributes.
+  5. How well the rate is predicted: the backtest, the choices, the exam per pool, per
+     risk level and for the total.
+  6. The card of every series (sff_ficha_serie) and what is still to come.
+It also writes sff_ficha_serie: one row per series with every attribute known about it.
+
+Actions (logged as they are done):
+  1. the card of every series
+  2. the six chapters of the report
+  3. check the card and the report                                    checks 1-2
+  4. write the card and the report file                               check 3
+  5. count the checks; stop if any failed
+  6. show the headline numbers, as a table
+
+Checks (logged as they are made, numbered, at the level of their status):
+   1. the card has one row per series
+   2. the report has its six chapters
+   3. table sff_ficha_serie written and read back
+
+Output: the card (one row per series) · table sff_ficha_serie · file informe_sff.md.
+"""
+
+# ─── imports ─────────────────────────────────────────────────────────────────────
+import os
+
+import numpy as np
+import pandas as pd
+
+from config import Config, UNKNOWN_DISCOUNT_BUCKET
+from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, LEVEL_OWN, PURPOSE_SELECTION, REPORT_FILE_NAME,
+                         ROLE_PROJECTION, ROLES_IN_ORDER, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
+                         SERIES_ID_COLUMN, SYNTHETIC_COLUMN, TABLE_SERIES_CARD, TRUTH_ROLES)
+
+
+# ─── the step ────────────────────────────────────────────────────────────────────
+STEP_LABEL = "IN"
+STEP_NAME = "REPORT"
+STEP_PURPOSE = ("tell, with the numbers of this run, what the raw was and how it was improved, the gaps filled, how "
+                "the binomial support improved, the dynamics of the rate and how well the rate is predicted; and "
+                "leave the card of every series")
+STEP_ACTIONS = ["the card of every series",
+                "the six chapters of the report",
+                "check the card and the report (checks 1-2)",
+                "write the card and the report file (check 3)",
+                "count the checks; stop if any failed",
+                "show the headline numbers, as a table"]
+STEP_OUTPUT = "one row per series (the card) · table sff_ficha_serie · file informe_sff.md"
+
+# ─── named constants ─────────────────────────────────────────────────────────────
+PROMISE_PP = 5.0                 # the promise to the business: a rate known within ±5 pp (90 %)
+CHAPTER_COUNT = 6
+TOP_ROWS = 10
+
+
+def markdown_table(frame: pd.DataFrame, decimals: int = 2) -> str:
+    """A pandas table as a markdown table (no extra library)."""
+    if frame is None or frame.empty:
+        return "_(no rows)_\n"
+    def cell(value):
+        if isinstance(value, (float, np.floating)):
+            if np.isnan(value):
+                return ""
+            return f"{value:,.{decimals}f}"
+        if isinstance(value, (int, np.integer)):
+            return f"{value:,}"
+        return str(value)
+    percent_columns = {column for column in frame.columns if str(column).startswith("pct") or str(column).endswith("_pct")
+                       or str(column) == "dentro_banda"}
+    frame = frame.copy()
+    for column in percent_columns:
+        frame[column] = frame[column].map(lambda value: "" if pd.isna(value) else f"{value:.1%}")
+    header = "| " + " | ".join(str(column) for column in frame.columns) + " |"
+    separator = "|" + "|".join("---" for _ in frame.columns) + "|"
+    rows = ["| " + " | ".join(cell(value) for value in row) + " |" for row in frame.itertuples(index=False)]
+    return "\n".join([header, separator] + rows) + "\n"
+
+
+def build_report(raw: pd.DataFrame, results: dict, configuration: Config) -> pd.DataFrame:
+    """The card of every series and the markdown report; checked and written."""
+    configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
+    check_log = []
+
+    # [1] the card of every series
+    card = series_card(results, configuration)
+    configuration.log_action(STEP_LABEL, 1, f"card of {len(card):,} series × {len(card.columns)} attributes")
+
+    # [2] the chapters
+    headline, chapters = [], []
+    chapters.append(chapter_raw(raw, results, configuration))
+    chapters.append(chapter_gaps(results, configuration))
+    chapters.append(chapter_support(results, configuration, headline))
+    chapters.append(chapter_dynamics(results, configuration))
+    chapters.append(chapter_precision(results, configuration, headline))
+    chapters.append(chapter_card_and_next(card))
+    report_text = report_cover(raw, results, configuration, headline) + "\n".join(chapters)
+    configuration.log_action(STEP_LABEL, 2, f"{len(chapters)} chapters written ({len(report_text):,} characters)")
+
+    # [3] the checks
+    configuration.log_action(STEP_LABEL, 3, "checking the card and the report")
+    configuration.log_check(STEP_LABEL, check_log, "the card has one row per series",
+                            len(card) == len(results["series"]) and card[SERIES_ID_COLUMN].is_unique,
+                            failure_detail=f"{len(card):,} card rows for {len(results['series']):,} series",
+                            context=f"{len(card):,} series")
+    configuration.log_check(STEP_LABEL, check_log, f"the report has its {CHAPTER_COUNT} chapters",
+                            report_text.count("\n## ") == CHAPTER_COUNT,
+                            failure_detail=f"{report_text.count(chr(10) + '## ')} chapters found")
+
+    # [4] the card and the file
+    configuration.log_action(STEP_LABEL, 4, "writing the card and the report file")
+    configuration.write_table(STEP_LABEL, check_log, card, TABLE_SERIES_CARD)
+    os.makedirs(configuration.output_folder, exist_ok=True)
+    report_path = os.path.join(configuration.output_folder, REPORT_FILE_NAME)
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        report_file.write(report_text)
+    configuration.logger.doc(f"[{STEP_LABEL}] report written: {report_path}")
+
+    # [5] the count of the checks; stop if anything failed
+    configuration.log_action(STEP_LABEL, 5, "counting the checks")
+    configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
+
+    # [6] the headline numbers
+    configuration.log_action(STEP_LABEL, 6, "the headline numbers of this run:")
+    configuration.show_table(pd.DataFrame(headline, columns=["indicador", "valor"]))
+    return card
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# THE CARD
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+def series_card(results: dict, configuration: Config) -> pd.DataFrame:
+    """One row per series: route, support, own rate, ladder, estimate, level, the dynamics and
+    the chosen techniques of its estimation id, and their exam error."""
+    card = results["series_estimate"].merge(results["series"][[SERIES_ID_COLUMN, "cobertura", "primer_mes", "ultimo_mes"]],
+                                            on=SERIES_ID_COLUMN, how="left")
+    dynamics = results.get("pool_dynamics")
+    if dynamics is not None and len(dynamics):
+        card = card.merge(dynamics[[ESTIMATION_ID_COLUMN, "phi", "tendencia", "tendencia_pp_ano", "estacional",
+                                    "amplitud_pp", "meses_alto", "meses_bajo"]], on=ESTIMATION_ID_COLUMN, how="left")
+    backtest = results.get("backtest")
+    if backtest is not None:
+        per_band = backtest["decision"][[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]].merge(
+            backtest["exam_by_pool"][[ESTIMATION_ID_COLUMN, "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio"]],
+            on=[ESTIMATION_ID_COLUMN, "tramo_h"], how="left")
+        wide = per_band.pivot(index=ESTIMATION_ID_COLUMN, columns="tramo_h")
+        wide.columns = [f"{name}_{band}" for name, band in wide.columns]
+        card = card.merge(wide, left_on=ESTIMATION_ID_COLUMN, right_index=True, how="left")
+    card["error_estimacion_pp"] = configuration.z * card["se_estimacion_pp"]
+    return card
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# THE CHAPTERS
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+def report_cover(raw: pd.DataFrame, results: dict, configuration: Config, headline: list) -> str:
+    fine = results["fine_table"]
+    series = results["series"]
+    headline.insert(0, ("filas del extracto", f"{len(raw):,}"))
+    headline.insert(1, ("forecast series", f"{len(series):,}"))
+    headline.insert(2, ("USD por predecir", f"${series['usd_por_predecir'].sum():,.0f}"))
+    lines = ["# SFF · Informe de la ejecución",
+             f"Mes en curso: **{configuration.calendar_boundaries()['current']}** · {configuration.calendar_description()}",
+             "", "### Cifras principales", "", markdown_table(pd.DataFrame(headline, columns=["indicador", "valor"])), ""]
+    return "\n".join(lines)
+
+
+def chapter_raw(raw: pd.DataFrame, results: dict, configuration: Config) -> str:
+    fine = results["fine_table"]
+    boundaries = configuration.calendar_boundaries()
+    closed = fine[configuration.period_col] < boundaries["current"]
+    null_read_as_zero = int((closed & fine[S0_RENEWED_UNITS_COLUMN].isna()).sum())
+    projection = fine[CALENDAR_ROLE_COLUMN] == ROLE_PROJECTION
+    early = fine[projection & fine[S0_RENEWED_UNITS_COLUMN].fillna(0).ne(0)]
+    per_role = (fine.groupby(CALENDAR_ROLE_COLUMN).agg(meses=(configuration.period_col, "nunique"), filas=(configuration.period_col, "size"),
+                                                       usd_vence=(configuration.pipeline_usd_col, "sum"))
+                .reindex(ROLES_IN_ORDER).dropna(how="all").reset_index())
+    checks = pd.DataFrame(configuration.check_history)
+    lines = ["## 1 · El raw y cómo lo mejoramos", "",
+             f"El extracto tiene **{len(raw):,} filas × {len(raw.columns)} columnas**, de "
+             f"{fine[configuration.period_col].min()} a {fine[configuration.period_col].max()}. "
+             f"Cada columna tiene un rol declarado en la Config y el calendario se genera desde el mes en curso.", "",
+             markdown_table(per_role, 0),
+             "**Comprobaciones de cada paso** (un fallo detiene la ejecución; un aviso se registra y sigue):", "",
+             markdown_table(checks[["paso", "nombre", "comprobaciones", "ok", "avisos", "fallos", "avisos_detalle"]], 0) if len(checks) else "",
+             "**Lo que se corrigió o completó en el raw:**", "",
+             f"- Renovaciones nulas en meses cerrados leídas como 0 (nadie renovó): **{null_read_as_zero:,} filas**.",
+             f"- Resultados adelantados borrados desde el mes en curso (el futuro no ha empezado): **{len(early):,} filas**, "
+             f"{early[S0_RENEWED_UNITS_COLUMN].sum():,.0f} unidades y ${early[S0_RENEWED_USD_COLUMN].sum():,.0f}. "
+             f"El raw original queda en las columnas s0_.",
+             ]
+    if configuration.discount_value_column:
+        unknown = (fine[configuration.discount_bucket_column] == UNKNOWN_DISCOUNT_BUCKET).mean()
+        lines.append(f"- Descuento: tramo derivado del descuento exacto con los cortes {configuration.discount_bucket_edges} %; "
+                     f"**{unknown:.1%}** de las filas sin dato (tramo `{UNKNOWN_DISCOUNT_BUCKET}`).")
+    lines.append(f"- Grano: {len(fine):,} filas = {len(fine):,} filas finas distintas (unidad + valores de revalorización + "
+                 f"descuento exacto); el dinero se conserva al agregar a {len(results['forecast_units']):,} forecast units.")
+    return "\n".join(lines) + "\n"
+
+
+def chapter_gaps(results: dict, configuration: Config) -> str:
+    rated = results["rated_units"]
+    gaps = rated[rated[SYNTHETIC_COLUMN] == 1]
+    rate_summary = results["series_rate"]
+    with_gaps = rate_summary[rate_summary["huecos"] > 0].sort_values("huecos", ascending=False)
+    history_months = rate_summary["meses_historia"].sum()
+    lines = ["## 2 · Huecos rellenados", "",
+             "Un hueco es un mes sin vencimientos DENTRO de la historia de una serie estimable. Un mes sin vencimientos "
+             "no dice nada de la tasa: su tasa queda **nula, nunca 0 %**, y el mes aparece como fila explícita con medidas a 0 "
+             "para que la historia de la serie esté completa y las sumas sigan cuadrando.", "",
+             f"- Huecos añadidos: **{len(gaps):,}** en **{len(with_gaps):,} series**, el "
+             f"{len(gaps) / history_months if history_months else 0:.1%} de los meses de historia.", "",
+             markdown_table(with_gaps.head(TOP_ROWS)[[SERIES_ID_COLUMN, "meses_historia", "huecos", "n_propio", "usd_por_predecir"]], 0)]
+    return "\n".join(lines) + "\n"
+
+
+def chapter_support(results: dict, configuration: Config, headline: list) -> str:
+    card = results["series_estimate"]
+    total_usd = card["usd_por_predecir"].sum()
+    with_history = card["meses_historia"] > 0
+
+    def bucket(n):
+        if n <= 0:
+            return "0 · sin historia propia"
+        if n < configuration.support_floor:
+            return f"1 · < {configuration.support_floor:.0f} (no fiable solo)"
+        if n < configuration.own_rate_floor:
+            return f"2 · {configuration.support_floor:.0f}-{configuration.own_rate_floor:.0f} (evidencia, sin precisión)"
+        return f"3 · ≥ {configuration.own_rate_floor:.0f} (precisa sola: ±5 pp)"
+
+    before = card.assign(soporte=card["n_propio"].map(bucket)).groupby("soporte").agg(
+        series=(SERIES_ID_COLUMN, "size"), usd_por_predecir=("usd_por_predecir", "sum")).reset_index()
+    before["pct_usd"] = before["usd_por_predecir"] / total_usd if total_usd else 0.0
+
+    before_error = card["error_binomial_pp"].where(with_history)
+    after_error = configuration.z * card["se_estimacion_pp"]
+    within_before = card.loc[before_error <= PROMISE_PP, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
+    within_after = card.loc[after_error <= PROMISE_PP, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
+    headline.append(("USD con la tasa conocida a ±5 pp: antes → después de la escalera", f"{within_before:.0%} → {within_after:.0%}"))
+    comparison = pd.DataFrame([
+        {"medida": "error de la tasa (90 %), ponderado por USD", "antes_pp": np.average(before_error.fillna(50), weights=card["usd_por_predecir"] + 1e-9),
+         "despues_pp": np.average(after_error.fillna(50), weights=card["usd_por_predecir"] + 1e-9)},
+        {"medida": f"% del USD con la tasa conocida a ±{PROMISE_PP:.0f} pp", "antes_pp": within_before * 100, "despues_pp": within_after * 100}])
+    levels = results["money_by_level"]
+    lines = ["## 3 · El soporte binomial, antes y después de la escalera", "",
+             "La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila por azar "
+             "(error binomial √(p(1−p)/n)). Con **30** contratos al mes una serie tiene evidencia para prestar; con **271** "
+             "su tasa se conoce a ±5 pp y puede ir sola. **Antes**: cada serie con su propio soporte. **Después**: la "
+             "escalera le presta el soporte del pariente más cercano que tiene suficiente, con credibilidad.", "",
+             "**Antes · el dinero por soporte propio (el dial):**", "", markdown_table(before),
+             "**Antes y después · el error con el que se CONOCE la tasa de cada serie** (antes: su error binomial con su "
+             "propio soporte; después: el error de la estimación de la escalera). La predicción de un mes concreto conserva "
+             "además el ruido de su propio tamaño, que ninguna escalera elimina: está en el nivel de riesgo.", "",
+             markdown_table(comparison, 1),
+             "**Después · el dinero por nivel de riesgo** (error_pp: error de predicción del mes siguiente, ponderado por dinero):", "",
+             markdown_table(levels)]
+    return "\n".join(lines) + "\n"
+
+
+def chapter_dynamics(results: dict, configuration: Config) -> str:
+    portfolio = results.get("portfolio_dynamics")
+    profile = results.get("portfolio_profile")
+    dynamics = results.get("pool_dynamics")
+    if portfolio is None:
+        return "## 4 · La dinámica de la tasa\n\n_(paso 13 no ejecutado)_\n"
+    verdict = "**hay efecto mes** más allá del ruido" if portfolio["estacional"] else "**no hay efecto mes** más allá del ruido"
+    lines = ["## 4 · La dinámica de la tasa: ¿hay algo más que ruido?", "",
+             "φ compara lo que varía la tasa mes a mes con lo que variaría solo por muestreo: φ ≈ 1, nada que modelar "
+             "(la media es la mejor técnica); φ > 1, algo la mueve (tendencia, estación, cambio de nivel o de mezcla). La "
+             "estacionalidad se prueba sobre la tasa sin su tendencia (prueba F del mes del año, 5 %). Es descriptivo: no "
+             "restringe ninguna técnica; el backtest decide.", "",
+             f"**Cartera completa:** {verdict} (p = {portfolio['p_valor_mes']:.3f}, amplitud {portfolio['amplitud_pp']:.1f} pp, "
+             f"consistencia entre mitades {portfolio['consistencia']:.2f}); tendencia {portfolio['tendencia_pp_ano']:+.1f} pp/año "
+             f"(p = {portfolio['p_valor_tendencia']:.3f}); φ {portfolio['phi']:.1f}. Un φ de cartera alto con tendencia suele "
+             f"ser cambio de mezcla, no comportamiento.", "",
+             markdown_table(profile)]
+    if dynamics is not None and len(dynamics):
+        lines += ["**Los pools con soporte, uno a uno:**", "",
+                  markdown_table(dynamics.sort_values("usd_por_predecir", ascending=False).head(TOP_ROWS)
+                                 [[ESTIMATION_ID_COLUMN, "meses", "phi", "tendencia_pp_ano", "estacional", "amplitud_pp",
+                                   "meses_alto", "meses_bajo", "usd_por_predecir"]])]
+    return "\n".join(lines) + "\n"
+
+
+def chapter_precision(results: dict, configuration: Config, headline: list) -> str:
+    backtest = results.get("backtest")
+    if backtest is None:
+        return "## 5 · Qué tal se predice la tasa\n\n_(paso 14 no ejecutado)_\n"
+    predictions, decision, exam_by_pool, exam_total = (backtest["predictions"], backtest["decision"],
+                                                       backtest["exam_by_pool"], backtest["exam_total"])
+    boundaries = configuration.calendar_boundaries()
+    reference = results["pool_reference"]
+    judged_share = (reference.loc[reference["gate"] == "nivel", "usd_por_predecir"].sum()
+                    / max(reference["usd_por_predecir"].sum(), 1))
+
+    exam_by_band = exam_by_pool.merge(reference[[ESTIMATION_ID_COLUMN, "usd_por_predecir"]], on=ESTIMATION_ID_COLUMN)
+    band_rows = []
+    for band_name, rows in exam_by_band.groupby("tramo_h"):
+        weights = rows["usd_por_predecir"] + 1e-9
+        band_rows.append({"tramo": band_name, "pools": len(rows),
+                          "error_elegida_pp": np.average(rows["elegida_err_pp_medio"], weights=weights),
+                          "error_retador_pp": np.average(rows["retador_err_pp_medio"], weights=weights),
+                          "sesgo_elegida_pp": np.average(rows["elegida_sesgo_pp"], weights=weights),
+                          "dentro_banda": rows["dentro_banda"].mean()})
+    by_band = pd.DataFrame(band_rows)
+
+    card = results["series_estimate"][[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "nivel_riesgo", "usd_por_predecir"]]
+    short = exam_by_pool[exam_by_pool["tramo_h"] == list(configuration.horizon_bands)[0]]
+    by_level = card.merge(short[[ESTIMATION_ID_COLUMN, "elegida_err_pp_medio", "retador_err_pp_medio"]], on=ESTIMATION_ID_COLUMN, how="left")
+    by_level = (by_level.dropna(subset=["elegida_err_pp_medio"]).groupby("nivel_riesgo")
+                .apply(lambda rows: pd.Series({"series": int(len(rows)), "usd_por_predecir": rows["usd_por_predecir"].sum(),
+                                               "error_elegida_pp": np.average(rows["elegida_err_pp_medio"], weights=rows["usd_por_predecir"] + 1e-9),
+                                               "error_retador_pp": np.average(rows["retador_err_pp_medio"], weights=rows["usd_por_predecir"] + 1e-9)}),
+                       include_groups=False).reset_index())
+    if len(by_level):
+        by_level["series"] = by_level["series"].astype(int)
+
+    total_error = exam_total["elegida_error_pct"].abs().mean()
+    headline.append(("error medio del TOTAL de renovaciones en el examen", f"{total_error:.1%}"))
+    if len(by_band):
+        first = by_band.iloc[0]
+        headline.append((f"error medio de la tasa por pool en el examen ({first['tramo']})",
+                         f"{first['error_elegida_pp']:.1f} pp (retador {first['error_retador_pp']:.1f} pp)"))
+    choices = (decision.groupby(["tramo_h", "tecnica_origen"]).size().rename("ids").reset_index())
+    selection = predictions[predictions["proposito"] == PURPOSE_SELECTION]
+    ranking = (selection.assign(abs_norm=selection["err_norm"].abs()).groupby(["tramo_h", "tecnica"])["abs_norm"].mean()
+               .rename("err_norm_medio").reset_index().sort_values(["tramo_h", "err_norm_medio"]))
+    lines = ["## 5 · Qué tal se predice la tasa de renovación", "",
+             "**Cómo se mide.** Cada pool con soporte se predice en meses que ya ocurrieron, sin mirar el futuro: para el mes T "
+             "a horizonte h, cada técnica solo ve hasta T − h. Los meses de **selección** (los "
+             f"{configuration.backtest_selection_months} anteriores al examen) eligen la técnica; los meses de **examen** "
+             f"({boundaries['test_start']} a {boundaries['pending_start'] - 1}) la miden sin que la haya visto. El error se "
+             "compara con el ruido binomial del mes (err_norm ≈ 1: tan cerca como permite el azar). Una técnica sustituye al "
+             f"retador ({configuration.challenger_technique}) solo si le gana por un margen. Compiten todas las técnicas que "
+             "la historia permite, también las de series temporales.", "",
+             f"Los pools juzgados cubren el **{judged_share:.0%}** del dinero por predecir; el resto toma el retador.", "",
+             "**Ranking en los meses de selección** (error normalizado medio):", "", markdown_table(ranking),
+             "**Elecciones:**", "", markdown_table(choices, 0),
+             "**Precisión en el examen por tramo** (error medio de la tasa en pp, ponderado por dinero; dentro_banda: "
+             "proporción de errores dentro de la banda del 90 %):", "", markdown_table(by_band),
+             "**Precisión en el examen por nivel de riesgo** (tramo corto):", "", markdown_table(by_level),
+             "**Precisión del TOTAL** (Σ renovaciones predichas frente a reales, pools juzgados):", "",
+             markdown_table(exam_total[["mes_objetivo", "h", "renovadas_reales", "elegida_renovadas_pred", "elegida_error_pct",
+                                        "retador_error_pct"]], 3)]
+    return "\n".join(lines) + "\n"
+
+
+def chapter_card_and_next(card: pd.DataFrame) -> str:
+    lines = ["## 6 · La ficha de cada serie y lo que falta", "",
+             f"`sff_ficha_serie` tiene una fila por serie ({len(card):,}) con todo lo que el framework sabe de ella: ruta, "
+             "soporte y tasa propios, pariente, credibilidad, tasa estimada y sus dos errores, nivel de riesgo, la dinámica y "
+             "las técnicas de su id de estimación y su error en el examen. `sff_nucleo` tiene la misma información fila a fila "
+             "con los meses (en Power BI: seleccionar `s03_fs_id`).", "",
+             "**Lo que falta** (siguientes pasos): la revalorización (uplift: vía contrato y estadística, y su backtest), el "
+             "ensamblaje del forecast en dinero con sus bandas, la validación final, y los análisis del bloque B (composición "
+             "y mix, descuento y churn, maduración de las señales, escenarios de precio, baseline, top movers)."]
+    return "\n".join(lines) + "\n"

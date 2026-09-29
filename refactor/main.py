@@ -29,6 +29,11 @@ from step_08_rate_series import build_rate_series
 from step_09_dimensions import analyse_dimensions
 from step_10_relatives import build_relatives
 from step_11_ladder import climb_the_ladder
+from step_12_pool_series import build_pool_series
+from step_13_dynamics import measure_dynamics
+from step_14_backtest import run_backtest
+from step_nucleo import build_core_table
+from step_informe import build_report
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -139,9 +144,24 @@ def run(configuration: Config) -> dict:
     relatives, pools = build_relatives(rated_units, series_rate, lookups["lookup_fs"], dimension_decision,
                                        configuration)                                            # step 10
     series_estimate, money_by_level = climb_the_ladder(series_rate, relatives, pools, configuration)   # step 11
-    return dict(relatives=relatives, pools=pools, series_estimate=series_estimate, money_by_level=money_by_level,
-                dimension_decision=dimension_decision, dimension_pairs=dimension_pairs, raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
-                series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
+    pool_series, pool_reference = build_pool_series(rated_units, relatives, pools, series_estimate, configuration)   # step 12
+    pool_dynamics, portfolio_profile, portfolio_dynamics = measure_dynamics(pool_series, pool_reference, configuration)   # step 13
+    backtest = run_backtest(pool_series, pool_reference, configuration)                            # step 14
+    core, core_legend = build_core_table(fine_table, configuration, forecast_units=forecast_units,
+                                         support_bound=support_bound, rated_units=rated_units,
+                                         series_table=series_table, series_rate=series_rate,
+                                         series_estimate=series_estimate, pool_dynamics=pool_dynamics,
+                                         technique_decision=backtest["decision"],
+                                         exam_by_pool=backtest["exam_by_pool"])                     # the core, last
+    results = dict(core=core, core_legend=core_legend, pool_series=pool_series, pool_reference=pool_reference,
+                   backtest=backtest, pool_dynamics=pool_dynamics, portfolio_profile=portfolio_profile,
+                   portfolio_dynamics=portfolio_dynamics, relatives=relatives, pools=pools,
+                   series_estimate=series_estimate, money_by_level=money_by_level,
+                   dimension_decision=dimension_decision, dimension_pairs=dimension_pairs,
+                   raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
+                   series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
+    results["card"] = build_report(raw, results, configuration)                                   # the report, last
+    return results
 
 
 if __name__ == "__main__":
