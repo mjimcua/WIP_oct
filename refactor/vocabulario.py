@@ -76,3 +76,28 @@ TABLE_SERIES_RATE = "series_tasa"            # step 08: one row per series: supp
 # ─── the tables of step 09 ───────────────────────────────────────────────────────
 TABLE_DIMENSIONS = "decision_eta2"           # step 09: how much each dimension separates the rate; collapse order
 TABLE_DIMENSION_PAIRS = "decision_eta2_pares"   # step 09: the pairs of dimensions with the most interaction
+
+# ─── the ladder (steps 10 and 11) ────────────────────────────────────────────────
+SIGN_TOKEN = "SIG="                          # inside a relative's pattern: the timevarying block summarised as its sign
+WILDCARD = "*"                               # inside a relative's pattern: a dimension collapsed or annulled
+RUNG_COLUMN = "peldano"                      # 0 = the series itself; the higher, the farther the relative
+PATTERN_COLUMN = "patron"                    # the id of a relative: the pool of every series that matches it
+ESTIMATION_ID_COLUMN = "id_estimacion"       # the pattern of the relative a series takes its rate from
+
+# The risk level of a series: how its rate is estimated, from best to worst.
+LEVEL_OWN = "A_propio"                        # its own support is precise (≥ own_rate_floor) and it has a full year
+LEVEL_OWN_SHORT = "A2_propio_corto"           # precise, but less than a year of history
+LEVEL_OWN_REINFORCED = "A3_propio_reforzado"  # evidence but not precision: its rate blended with its first pool
+LEVEL_BORROWED = "B_prestado"                 # below the floor; a close relative (same mandatory dims)
+LEVEL_FAR = "C_lejano"                        # below the floor; the mandatory cell or a collapsed dimension
+LEVEL_SIGNED_UNDER_FLOOR = "S_signo_bajo_suelo"   # signed, and no relative of its sign reaches the floor
+LEVEL_MIXED = "M_signo_mixto"                 # flags of both signs: never pooled
+LEVEL_NO_HISTORY = "D_sin_historia"           # nothing to learn from (solo_futuro)
+LEVEL_NO_IMPACT = "N_sin_impacto"             # nothing to predict (solo_historia)
+LEVEL_TIME_SERIES = "T_universo_ts"           # the time_series universe: treated apart
+
+# ─── the tables of steps 10 and 11 ───────────────────────────────────────────────
+TABLE_RELATIVES = "parientes"                 # step 10: every series × rung: its relative's pattern
+TABLE_POOLS = "pools"                         # step 10: every pattern: its support and its rate
+TABLE_SERIES_ESTIMATE = "series_estimacion"   # step 11: every series: its chosen relative, rate, errors, level
+TABLE_RISK_LEVELS = "niveles_riesgo"          # step 11: money by risk level

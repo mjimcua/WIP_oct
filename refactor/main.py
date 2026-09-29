@@ -27,6 +27,8 @@ from step_06_series_routes import build_series_routes
 from step_07_support_bound import build_support_bound
 from step_08_rate_series import build_rate_series
 from step_09_dimensions import analyse_dimensions
+from step_10_relatives import build_relatives
+from step_11_ladder import climb_the_ladder
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -134,7 +136,11 @@ def run(configuration: Config) -> dict:
     support_bound = build_support_bound(forecast_units, configuration)   # step 07
     rated_units, series_rate = build_rate_series(forecast_units, series_table, configuration)   # step 08
     dimension_decision, dimension_pairs = analyse_dimensions(series_rate, lookups["lookup_fs"], configuration)   # step 09
-    return dict(dimension_decision=dimension_decision, dimension_pairs=dimension_pairs, raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
+    relatives, pools = build_relatives(rated_units, series_rate, lookups["lookup_fs"], dimension_decision,
+                                       configuration)                                            # step 10
+    series_estimate, money_by_level = climb_the_ladder(series_rate, relatives, pools, configuration)   # step 11
+    return dict(relatives=relatives, pools=pools, series_estimate=series_estimate, money_by_level=money_by_level,
+                dimension_decision=dimension_decision, dimension_pairs=dimension_pairs, raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
                 series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
 
 
