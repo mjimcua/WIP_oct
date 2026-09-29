@@ -208,6 +208,15 @@ class Config:
                                           # moves ±15 pp by chance (90 %, p = 0.5): it will borrow support
 
     dimension_pairs_shown: int = 20       # step 09: pairs of dimensions kept, the ones with the most interaction
+    # ─── the ladder (steps 10 and 11) ───
+    own_rate_floor: float = 271.0         # contracts in a typical month to predict ALONE: ±5 pp at 90 % (p = 0.5).
+                                          # 30 says who may speak; 271 who may speak alone
+    k_cred: float = 60.0                  # Bühlmann k when a relative has too few siblings to estimate it: a series
+                                          # with n = 30 keeps 33 % of its own rate ("twice the floor to be believed half")
+    close_relative_max_rung: int = 2      # rungs 1-2 share every mandatory dim (close: level B); 3 and up are far (C)
+    own_level_min_history_months: int = 12    # a full year to be level A (a seasonal series has seen every season)
+    signed_ladder_max_loss: float = 0.05  # a signed series may collapse mandatory dims (sign kept) while the cumulative
+                                          # R² lost (step 09) stays ≤ this; 0 = its ladder ends at the cell × sign
 
     # ─── where the tables are written ───────────────────────────────────────────────
     sql_engine: Optional[object] = None   # a SQLAlchemy engine; None → CSV files in output_folder
