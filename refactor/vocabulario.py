@@ -72,3 +72,7 @@ SIGN_COLUMN = "signo"                        # step 08: the sign of the series
 TABLE_UNIT_SUPPORT = "fu_soporte"            # step 07: worst-case binomial bound per forecast unit
 TABLE_GAPS = "fu_huecos"                     # step 08: the gap rows added inside the history of a series
 TABLE_SERIES_RATE = "series_tasa"            # step 08: one row per series: support, own rate, error, sign
+
+# ─── the tables of step 09 ───────────────────────────────────────────────────────
+TABLE_DIMENSIONS = "decision_eta2"           # step 09: how much each dimension separates the rate; collapse order
+TABLE_DIMENSION_PAIRS = "decision_eta2_pares"   # step 09: the pairs of dimensions with the most interaction
