@@ -108,3 +108,28 @@ TABLE_CORE_LEGEND = "nucleo_leyenda"          # every column of the core: its st
 ROW_ORIGIN_COLUMN = "origen_fila"             # where the row comes from
 ROW_FROM_RAW = "raw"                          # a row of the extract
 ROW_FROM_GAP = "hueco"                        # a month with no expirations inside the history of a series (step 08)
+
+# ─── steps 12 and 14: the pool series and the backtest ───────────────────────────
+GATE_SUPPORT = "soporte"                      # a pool below the support floor: not judged (it takes the challenger)
+GATE_LEVEL = "nivel"                          # a pool with support: judged by the backtest
+PURPOSE_SELECTION = "seleccion"               # a target month used to CHOOSE the technique
+PURPOSE_EXAM = "examen"                       # a target month used only to MEASURE the chosen technique
+CHAMPION_ORIGIN = "campeon"                   # the technique beat the challenger by the margin
+CHALLENGER_ORIGIN = "retador"                 # nobody beat it: the challenger stays
+
+TABLE_POOL_SERIES = "pool_serie"              # step 12: the monthly series of every estimation id
+TABLE_POOL_REFERENCE = "pool_referencia"      # step 12: one row per estimation id: months, support, rate, gate
+TABLE_TECHNIQUES = "dim_tecnica"              # step 14: the catalogue of techniques
+TABLE_BACKTEST_PREDICTIONS = "backtest_predicciones"   # step 14: one row per id × target × horizon × technique
+TABLE_TECHNIQUE_DECISION = "decision_tecnica"          # step 14: the chosen technique per id and horizon band
+TABLE_ERROR_BANDS = "decision_bandas"                  # step 14: error quantiles per technique and horizon
+TABLE_EXAM_BY_POOL = "backtest_examen"                 # step 14: the chosen technique vs the challenger in the exam, per id
+TABLE_EXAM_TOTAL = "backtest_examen_total"             # step 14: the error of the TOTAL renewals in every exam month
+
+# ─── step 13: the dynamics of the rate ───────────────────────────────────────────
+TABLE_PORTFOLIO_SEASONALITY = "estacionalidad_cartera"   # step 13: the month effect of the whole portfolio
+TABLE_POOL_DYNAMICS = "dinamica_pool"                    # step 13: φ, trend, seasonality of every estimation id
+
+# ─── the report ──────────────────────────────────────────────────────────────────
+TABLE_SERIES_CARD = "ficha_serie"            # one row per series: every attribute the framework knows about it
+REPORT_FILE_NAME = "informe_sff.md"          # the report, in the output folder
