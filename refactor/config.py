@@ -207,6 +207,8 @@ class Config:
     support_floor: float = 30.0           # contracts in a typical month below which a series' own rate
                                           # moves ±15 pp by chance (90 %, p = 0.5): it will borrow support
 
+    dimension_pairs_shown: int = 20       # step 09: pairs of dimensions kept, the ones with the most interaction
+
     # ─── where the tables are written ───────────────────────────────────────────────
     sql_engine: Optional[object] = None   # a SQLAlchemy engine; None → CSV files in output_folder
     sql_schema: Optional[str] = None      # "dbo" in SQL Server; None in SQLite

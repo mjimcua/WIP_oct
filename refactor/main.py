@@ -26,6 +26,7 @@ from step_05_lookups import build_lookups
 from step_06_series_routes import build_series_routes
 from step_07_support_bound import build_support_bound
 from step_08_rate_series import build_rate_series
+from step_09_dimensions import analyse_dimensions
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ def kamelot_engine():
 
 class KamelotConfig(Config):
     def read_raw(self) -> pd.DataFrame:
-        return pd.read_sql(RAW_EXTRACT_QUERY, self.sql_engine)
+        return pd.read_sql(self.raw_extract_sql, self.sql_engine)
 
 
 class SyntheticConfig(Config):
@@ -61,32 +62,32 @@ class SyntheticConfig(Config):
 
 
 def kamelot_configuration() -> Config:
-    """The Kamelot extract. Names marked [por confirmar] must be checked against it:
-    step 00 names every column that is missing or has no role."""
+    """The Kamelot extract, as seen in the runs of 29-sep. Names marked [por confirmar]
+    must be checked against it: step 00 names every column that is missing or has no role."""
     return KamelotConfig(
         # where the raw is read from and the tables are written to
         sql_engine=kamelot_engine(),
         sql_schema="dbo",
+        raw_extract_sql=RAW_EXTRACT_QUERY,
         # the calendar
         current_month="01/09/2026",
         test_months=3,
         pending_close_months=0,
         # the dimensions
-        business_mandatory_dims=["regional_level_1", "regional_level_2", "regional_level_3",
-                                 "product_level_1", "product_level_2", "purchase_type",
-                                 "term_level_1", "term_level_2", "band_level_1", "band_level_2"],
+        business_mandatory_dims=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3",
+                                 "tr_product_level_1", "tr_product_level_2", "tr_purchase_type", "tr_renewal_type",
+                                 "tr_term_level_1", "tr_term_level_2", "tr_band_level_1", "tr_band_level_2",
+                                 "tr_master_partner_code"],
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",
-                                     "no_instalado": "negative", "autorenew": "positive"},
-        extra_renovacion=["net_new"],                   # [por confirmar] + the channel column, if any
-        extra_revalorizacion=["discount_interval"],     # [por confirmar] the discount bucket
-        # uplift cells on the dims that move the price: the 10 mandatory dims made 26,090
-        # cells in Kamelot, 70 % of them under the floor (decision of the reference)
-        uplift_mandatory_dims=["regional_level_1", "product_level_1", "purchase_type", "term_level_2"],
+                                     "not_installed": "negative"},            # [por confirmar] the signs
+        extra_renovacion=["net_new", "prev_OperationGroup"],
+        extra_revalorizacion=["price_cap", "msrp_increased"],
+        # the discount: ONE column, both sides (the bucket is derived with the default edges,
+        # the same as the extract's old discount_interval)
+        discount_value_column="discount",
         # the other columns of the extract
         extra_measure_cols=["total_reacquired_units", "total_reacquired_usd", "TR_AUV", "REN_AUV", "ReAC_AUV"],
-        discount_value_column="discount",               # [por confirmar]
-        sku_column="sku",                               # [por confirmar]
-        ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],
+        ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
     )
 
 
@@ -103,9 +104,11 @@ def synthetic_configuration() -> Config:
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",
                                      "no_instalado": "negative", "autorenew": "positive"},
         extra_renovacion=["channel"],
-        extra_revalorizacion=["discount", "newcust"],
+        extra_revalorizacion=["newcust"],
+        # the synthetic carries the exact discount as discount_pct and its own bucket as
+        # discount: the framework derives the bucket, so the synthetic's is ignored
         discount_value_column="discount_pct",
-        ignore_cols=["dataset_role", "is_current_month"],
+        ignore_cols=["dataset_role", "is_current_month", "discount"],
     )
 
 
@@ -130,7 +133,8 @@ def run(configuration: Config) -> dict:
     series_table = build_series_routes(forecast_units, configuration)    # step 06
     support_bound = build_support_bound(forecast_units, configuration)   # step 07
     rated_units, series_rate = build_rate_series(forecast_units, series_table, configuration)   # step 08
-    return dict(raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
+    dimension_decision, dimension_pairs = analyse_dimensions(series_rate, lookups["lookup_fs"], configuration)   # step 09
+    return dict(dimension_decision=dimension_decision, dimension_pairs=dimension_pairs, raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
                 series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
 
 
