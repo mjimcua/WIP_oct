@@ -18,6 +18,11 @@ What it holds (grows with the steps that need it):
       configuration.show_table(...)       concrete rows, as a pandas table (never logged)
   · THE IDS AND KEYS: how a row names its rate series, its forecast unit and its
     uplift cell (joined text ids), and their keys (a hash of each id).
+  · THE DISCOUNT: ONE column of the extract (the exact discount, a share: 0.25 = 25 %)
+    serves both sides. As it is, it feeds the contract rule of the uplift
+    (1 / (1 − discount)) and is part of the identity of a fine row. Cut into buckets
+    (discount_bucket_edges), it is a dimension of the uplift cell. A null discount is
+    unknown, not 0 %: its bucket is "sin_dato" and it takes the statistical uplift.
   · THE STATISTICAL PARAMETERS: the z of the bands and the support floor.
   · THE TABLES: where they are written (a SQL engine, or CSV files when there is none).
     Every table is read back after writing and its row count checked.
@@ -67,6 +72,7 @@ ID_FIELD_SEPARATOR = "|"
 COMBINED_ID_SEPARATOR = "||"
 NO_REVALUATION_VALUES = "na"      # the revaluation part of a fine row when no extra_revalorizacion is declared
 HASH_HEX_DIGITS = 12              # 48 bits: fits a SQL bigint
+NULL_ID_TEXT = "null"             # how a null value is written inside an id (e.g. an unknown exact discount)
 
 # The status of a check, and the level it is logged at.
 STATUS_OK, STATUS_WARNING, STATUS_FAILED, STATUS_NOT_EVALUATED = "ok", "WARN", "FAIL", "--"
@@ -79,6 +85,9 @@ ACTIVE_FLAG_VALUES = (1, True, "1")
 
 # A timevarying column rotates towards churn (negative) or towards renewal (positive).
 VALID_TIMEVARYING_SIGNS = ("negative", "positive")
+
+# The bucket of a row whose exact discount is null (unknown, not 0 %).
+UNKNOWN_DISCOUNT_BUCKET = "sin_dato"
 
 # The three accepted spellings of a month.
 MONTH_ONLY_PATTERN = re.compile(r"^\d{4}-\d{2}$")              # 2026-09
@@ -105,13 +114,38 @@ def parse_month(month_value) -> pd.Period:
     raise ValueError(f"'{month_value}' is not a month: use 'YYYY-MM', 'YYYY-MM-DD' or 'DD/MM/YYYY'")
 
 
+def discount_bucket_labels(discount_values: pd.Series, bucket_edges_pct: list) -> pd.Series:
+    """The bucket of every exact discount, labelled like the extract's discount_interval:
+    "07 _ 60-70%" for a discount of 0.65. Buckets are [low, high) in percent, the last one
+    closed ([90, 100]); the number is the bucket's position, from 01. A null discount is
+    unknown: "sin_dato". A value outside the edges is left null (step 01 already stops a
+    discount outside [0, 1])."""
+    percent_values = (pd.to_numeric(discount_values, errors="coerce") * 100).round(6)
+    labels = [f"{position:02d} _ {low:g}-{high:g}%"
+              for position, (low, high) in enumerate(zip(bucket_edges_pct[:-1], bucket_edges_pct[1:]), 1)]
+    bucket_codes = pd.cut(percent_values, bins=bucket_edges_pct, labels=labels, right=False, include_lowest=True)
+    buckets = bucket_codes.astype(object)
+    at_the_top = percent_values == bucket_edges_pct[-1]           # 100 % closes the last bucket
+    buckets[at_the_top] = labels[-1]
+    buckets[percent_values.isna()] = UNKNOWN_DISCOUNT_BUCKET
+    return buckets
+
+
 def join_columns(frame: pd.DataFrame, columns: list) -> pd.Series:
     """The "|"-joined id of every row from several columns, in the given order (the order
-    is part of the id). Built on arrays, not Series, so a duplicated index cannot misalign it."""
-    joined_ids = frame[columns[0]].astype(str).to_numpy(dtype=object)
+    is part of the id); a null value is written "null". Built on arrays, not Series, so a
+    duplicated index cannot misalign it."""
+    joined_ids = id_text(frame[columns[0]])
     for column_name in columns[1:]:
-        joined_ids = joined_ids + ID_FIELD_SEPARATOR + frame[column_name].astype(str).to_numpy(dtype=object)
+        joined_ids = joined_ids + ID_FIELD_SEPARATOR + id_text(frame[column_name])
     return pd.Series(joined_ids, index=frame.index)
+
+
+def id_text(values: pd.Series) -> np.ndarray:
+    """The values of one column as the text they take inside an id; null → "null"."""
+    texts = values.astype(str).to_numpy(dtype=object)
+    texts[values.isna().to_numpy()] = NULL_ID_TEXT
+    return texts
 
 
 def hash_key(identifier) -> int:
@@ -137,6 +171,10 @@ def running_in_notebook() -> bool:
 @dataclass
 class Config:
 
+    # ─── where the raw comes from ───────────────────────────────────────────────────
+    raw_extract_sql: Optional[str] = None # the SQL of the extract (or a table name): read_raw may use it, and the
+                                          # diagnostics write their reproduction queries on top of it
+
     # ─── the columns of the raw, by role ────────────────────────────────────────────
     period_col: str = "period"                              # the month of the row
     pipeline_units_col: str = "total_tr_units"              # subscriptions falling due
@@ -152,7 +190,10 @@ class Config:
     extra_revalorizacion: list = field(default_factory=list)          # enter the uplift cell only
 
     uplift_mandatory_dims: Optional[list] = None      # mandatory dims of the uplift cell; None = all of them
-    discount_value_column: Optional[str] = None   # the exact discount (formula input, never a dimension)
+    # the discount: one column, both sides (see the module header). None = no discount in the extract
+    discount_value_column: Optional[str] = "discount"          # the exact discount, a share (0.25 = 25 %)
+    discount_bucket_edges: list = field(default_factory=lambda: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100])  # in %
+    discount_bucket_column: str = "tramo_descuento"            # the derived bucket (a dimension of the uplift cell)
     sku_column: Optional[str] = None              # the SKU (formula input for the price scenarios)
     ignore_cols: list = field(default_factory=list)   # read by nobody; may be absent from the raw
 
@@ -211,6 +252,9 @@ class Config:
         # [3] the calendar parameters are well formed
         if self.current_month is not None:
             parse_month(self.current_month)
+        edges = list(self.discount_bucket_edges)
+        if edges != sorted(set(edges)) or edges[0] != 0 or edges[-1] != 100:
+            raise ValueError(f"discount_bucket_edges must go up strictly from 0 to 100 (in %): {edges}")
         if int(self.test_months) < 1:
             raise ValueError(f"test_months must be at least 1 (found {self.test_months}): without an exam nothing is evaluated")
         if int(self.pending_close_months) < 0:
@@ -348,11 +392,27 @@ class Config:
                 + self.extra_renovacion)
 
     @property
+    def dimension_columns(self) -> list:
+        """Every dimension, each once, in the order of the taxonomy: mandatory, timevarying,
+        extra_renovacion, extra_revalorizacion."""
+        return list(dict.fromkeys(self.business_mandatory_dims + list(self.structural_timevarying_dims)
+                                  + self.extra_renovacion + self.extra_revalorizacion))
+
+    @property
     def uplift_cell_columns(self) -> list:
         """The columns of ONE uplift cell (the price context): the uplift mandatory dims
-        (all mandatory unless uplift_mandatory_dims says fewer) + extra_revalorizacion."""
+        (all mandatory unless uplift_mandatory_dims says fewer) + extra_revalorizacion +
+        the discount bucket derived from the exact discount (when there is one)."""
         uplift_mandatory = self.uplift_mandatory_dims if self.uplift_mandatory_dims is not None else self.business_mandatory_dims
-        return list(uplift_mandatory) + self.extra_revalorizacion
+        bucket = [self.discount_bucket_column] if self.discount_value_column else []
+        return list(uplift_mandatory) + self.extra_revalorizacion + bucket
+
+    @property
+    def fine_row_columns(self) -> list:
+        """What makes a fine row unique inside its forecast unit: the extra_revalorizacion
+        values and the exact discount (the extract comes one row per exact discount)."""
+        exact_discount = [self.discount_value_column] if self.discount_value_column else []
+        return self.extra_revalorizacion + exact_discount
 
     @property
     def core_measures(self) -> list:
