@@ -12,12 +12,14 @@ markdown report informe_sff.md with these chapters:
   4. The dynamics of the rate: the portfolio's month profile and the pools' attributes.
   5. How well the rate is predicted: the backtest, the choices, the exam per pool, per
      risk level and for the total.
-  6. The card of every series (sff_ficha_serie) and what is still to come.
+  6. The revaluation: the uplift of the cells, the contract rule and the backtest's verdict.
+  7. The forecast in money: by month and by year, with its bands; the final validation.
+  8. The card of every series (sff_ficha_serie) and what is still to come.
 It also writes sff_ficha_serie: one row per series with every attribute known about it.
 
 Actions (logged as they are done):
   1. the card of every series
-  2. the six chapters of the report
+  2. the eight chapters of the report
   3. check the card and the report                                    checks 1-2
   4. write the card and the report file                               check 3
   5. count the checks; stop if any failed
@@ -25,7 +27,7 @@ Actions (logged as they are done):
 
 Checks (logged as they are made, numbered, at the level of their status):
    1. the card has one row per series
-   2. the report has its six chapters
+   2. the report has its eight chapters
    3. table sff_ficha_serie written and read back
 
 Output: the card (one row per series) · table sff_ficha_serie · file informe_sff.md.
@@ -50,7 +52,7 @@ STEP_PURPOSE = ("tell, with the numbers of this run, what the raw was and how it
                 "the binomial support improved, the dynamics of the rate and how well the rate is predicted; and "
                 "leave the card of every series")
 STEP_ACTIONS = ["the card of every series",
-                "the six chapters of the report",
+                "the eight chapters of the report",
                 "check the card and the report (checks 1-2)",
                 "write the card and the report file (check 3)",
                 "count the checks; stop if any failed",
@@ -59,7 +61,7 @@ STEP_OUTPUT = "one row per series (the card) · table sff_ficha_serie · file in
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 PROMISE_PP = 5.0                 # the promise to the business: a rate known within ±5 pp (90 %)
-CHAPTER_COUNT = 6
+CHAPTER_COUNT = 8
 TOP_ROWS = 10
 
 
@@ -102,6 +104,8 @@ def build_report(raw: pd.DataFrame, results: dict, configuration: Config) -> pd.
     chapters.append(chapter_support(results, configuration, headline))
     chapters.append(chapter_dynamics(results, configuration))
     chapters.append(chapter_precision(results, configuration, headline))
+    chapters.append(chapter_uplift(results, configuration))
+    chapters.append(chapter_forecast(results, configuration, headline))
     chapters.append(chapter_card_and_next(card))
     report_text = report_cover(raw, results, configuration, headline) + "\n".join(chapters)
     configuration.log_action(STEP_LABEL, 2, f"{len(chapters)} chapters written ({len(report_text):,} characters)")
@@ -356,13 +360,61 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     return "\n".join(lines) + "\n"
 
 
+def chapter_uplift(results: dict, configuration: Config) -> str:
+    cells, check = results.get("uplift_cells"), results.get("contract_check")
+    comparison, verdict = results.get("uplift_backtest"), results.get("uplift_verdict")
+    if cells is None:
+        return "## 6 · La revalorización\n\n_(pasos 15-16 no ejecutados)_\n"
+    by_origin = cells.groupby("uplift_origen").agg(celdas=("uplift_cell_id", "size"), uplift_medio=("uplift", "mean"),
+                                                   renovadores=("renovadores", "sum")).reset_index()
+    lines = ["## 6 · La revalorización: a qué precio se renueva", "",
+             "El uplift es lo que paga quien renueva respecto a lo que vencía (1,00 = mismo precio). Dos vías: la "
+             "**estadística** (el uplift observado en las renovaciones pasadas de su celda de uplift: dimensiones mandatory, "
+             "extras de revalorización y tramo de descuento; con menos de "
+             f"{configuration.uplift_floor:.0f} renovadores toma el de su padre) y la del **contrato** (quien pagó con "
+             "descuento d renueva a lista: 1 / (1 − d)).", "",
+             "**Las celdas por origen de su uplift:**", "", markdown_table(by_origin),
+             "**La regla de contrato frente a las renovaciones pasadas con descuento conocido** (ratio_realizacion 1 = exacta):", "",
+             markdown_table(check, 3),
+             f"**El backtest del uplift** (meses de examen; precio de las renovaciones reales predicho por cada vía, con el "
+             f"uplift estadístico estimado ANTES del examen): la vía usada donde hay descuento es la "
+             f"**{verdict['via_usada_con_descuento']}**.", "", markdown_table(comparison, 3)]
+    return "\n".join(lines) + "\n"
+
+
+def chapter_forecast(results: dict, configuration: Config, headline: list) -> str:
+    forecast = results.get("forecast")
+    if forecast is None:
+        return "## 7 · El forecast en dinero\n\n_(paso 17 no ejecutado)_\n"
+    rows, by_month, by_year = forecast["forecast"], forecast["by_month"], forecast["by_year"]
+    validation = results.get("validation")
+    for _, year_row in by_year[by_year["esperado_usd"] > 0].iterrows():
+        headline.append((f"renovado {int(year_row['ano'])}: real + esperado (± cuadratura)",
+                         f"${year_row['total_usd']:,.0f} ± ${year_row['banda_cuadratura_usd']:,.0f}"))
+    origins = rows.groupby("origen_tasa").agg(filas=("esperado_usd", "size"), usd_vence=(configuration.pipeline_usd_col, "sum"),
+                                              esperado_usd=("esperado_usd", "sum")).reset_index()
+    lines = ["## 7 · El forecast en dinero", "",
+             "Cada fila futura: **USD que vence × tasa de su serie × uplift de su celda**. La tasa la predice la técnica "
+             "elegida para el id de estimación de la serie a su horizonte (aprendiendo de todos los meses cerrados); una serie "
+             "que toma prestado conserva su diferencia de nivel con el pool en proporción a su credibilidad"
+             + (" (activado)" if configuration.apply_credibility_shift else " (desactivado)") + ". Sin id de estimación: la "
+             "tasa de su celda mandatory. Las bandas: **lineal** (todos los errores en el mismo sentido, el peor caso) y "
+             "**cuadratura** (errores independientes); la verdad está entre ambas.", "",
+             "**Por mes:**", "", markdown_table(by_month, 0),
+             "**Por año** (lo renovado en los meses cerrados + lo esperado en los futuros):", "", markdown_table(by_year, 0),
+             "**De dónde sale la tasa de las filas futuras:**", "", markdown_table(origins, 0)]
+    if validation is not None:
+        lines += ["**Validación final de la cadena:**", "", markdown_table(validation)]
+    return "\n".join(lines) + "\n"
+
+
 def chapter_card_and_next(card: pd.DataFrame) -> str:
-    lines = ["## 6 · La ficha de cada serie y lo que falta", "",
+    lines = ["## 8 · La ficha de cada serie y lo que falta", "",
              f"`sff_ficha_serie` tiene una fila por serie ({len(card):,}) con todo lo que el framework sabe de ella: ruta, "
              "soporte y tasa propios, pariente, credibilidad, tasa estimada y sus dos errores, nivel de riesgo, la dinámica y "
              "las técnicas de su id de estimación y su error en el examen. `sff_nucleo` tiene la misma información fila a fila "
              "con los meses (en Power BI: seleccionar `s03_fs_id`).", "",
-             "**Lo que falta** (siguientes pasos): la revalorización (uplift: vía contrato y estadística, y su backtest), el "
-             "ensamblaje del forecast en dinero con sus bandas, la validación final, y los análisis del bloque B (composición "
-             "y mix, descuento y churn, maduración de las señales, escenarios de precio, baseline, top movers)."]
+             "**Lo que falta** (siguientes pasos): el horizonte extendido (reentradas de 2026 y captación simulada de 2027, "
+             "más allá de la pipeline que trae el extracto), y los análisis del bloque B (composición y mix, descuento y churn, "
+             "maduración de las señales, escenarios de precio, baseline de la hoja de cálculo, top movers)."]
     return "\n".join(lines) + "\n"

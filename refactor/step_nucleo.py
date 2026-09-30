@@ -94,6 +94,20 @@ RAW_MEASURES = [("s00_vencen_unidades", "00", "units falling due, as in the extr
 CALENDAR_MEASURES = [("s02_renovadas_unidades", "02", "renewed units after the calendar: null → 0 in closed months, wiped from the current month on"),
                      ("s02_renovado_usd", "02", "renewed USD after the calendar: null → 0 in closed months, wiped from the current month on")]
 
+# steps 15-17, per FUTURE ROW (a value of the row: the money columns add up)
+ROW_VALUES_STEP_17 = [("h", "s17_h", "17", "months from the last closed month"),
+                      ("origen_tasa", "s17_origen_tasa", "17", "pool (technique of its estimation id) · celda_mandatory · global"),
+                      ("tecnica", "s17_tecnica", "17", "the technique that predicted the rate of this row"),
+                      ("tasa", "s17_tasa", "17", "the predicted rate of the row (units)"),
+                      ("tasa_baja", "s17_tasa_baja", "17", "low end of the rate band"),
+                      ("tasa_alta", "s17_tasa_alta", "17", "high end of the rate band"),
+                      ("via_uplift", "s15_via_uplift", "15", "contrato (1/(1 − d)) · estadistica (its cell)"),
+                      ("uplift", "s15_uplift", "15", "the uplift applied to the row"),
+                      ("esperado_unidades", "s17_esperado_unidades", "17", "expected renewed units (SUM)"),
+                      ("esperado_usd", "s17_esperado_usd", "17", "expected renewed USD (SUM)"),
+                      ("esperado_usd_bajo", "s17_esperado_usd_bajo", "17", "low end of the row's USD band (SUM = the worst case of a total)"),
+                      ("esperado_usd_alto", "s17_esperado_usd_alto", "17", "high end of the row's USD band (SUM = the worst case of a total)")]
+
 # The blocks of values of the forecast unit, of the series and of its estimation id:
 # (source column, core name, step, description). A block enters when its step has run.
 UNIT_VALUES_STEP_04 = [(FINE_ROWS_COLUMN, "s04_filas_finas", "04", "fine rows added into the unit")]
@@ -138,7 +152,8 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
                      support_bound: pd.DataFrame = None, rated_units: pd.DataFrame = None,
                      series_table: pd.DataFrame = None, series_rate: pd.DataFrame = None,
                      series_estimate: pd.DataFrame = None, pool_dynamics: pd.DataFrame = None,
-                     technique_decision: pd.DataFrame = None, exam_by_pool: pd.DataFrame = None) -> tuple:
+                     technique_decision: pd.DataFrame = None, exam_by_pool: pd.DataFrame = None,
+                     forecast: pd.DataFrame = None) -> tuple:
     """The core table with every block whose step has run, and its legend; checked and written."""
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
     check_log = []
@@ -178,6 +193,12 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
     if technique_decision is not None and "s11_id_estimacion" in core.columns:
         core, backtest_specs = add_backtest_block(core, technique_decision, exam_by_pool, configuration)
         blocks_present.append(backtest_specs)
+    if forecast is not None:
+        forecast_values = forecast[["_fila"] + [source for source, _, _, _ in ROW_VALUES_STEP_17]]
+        forecast_values = forecast_values.rename(columns={source: name for source, name, _, _ in ROW_VALUES_STEP_17})
+        core = core.merge(forecast_values, on="_fila", how="left")
+        blocks_present.append(ROW_VALUES_STEP_17)
+    core = core.drop(columns="_fila")
     if "s04_filas_finas" in core.columns:
         core.loc[core[ROW_ORIGIN_COLUMN] == ROW_FROM_GAP, "s04_filas_finas"] = 0     # a gap adds no fine row
     core = core.sort_values(["s03_fs_id", configuration.period_col, ROW_ORIGIN_COLUMN]).reset_index(drop=True)
@@ -259,6 +280,7 @@ def rows_of_the_extract(fine_table: pd.DataFrame, dimension_columns: list, confi
     raw_rows["s03_fs_id"] = fine_table[SERIES_ID_COLUMN]
     raw_rows["s03_fu_id"] = fine_table[UNIT_ID_COLUMN]
     raw_rows["s03_uplift_cell_id"] = fine_table[UPLIFT_CELL_ID_COLUMN]
+    raw_rows["_fila"] = fine_table.index      # the position of the fine row: the forecast joins on it, then it is dropped
     return raw_rows.reset_index(drop=True)
 
 
@@ -300,8 +322,15 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
                     ("s03_fu_id", "03", LEVEL_ROW, AGGREGATE_SLICER, "the forecast unit: the series in its month"),
                     ("s03_uplift_cell_id", "03", LEVEL_ROW, AGGREGATE_SLICER, "the price context (uplift cell)")]
     unit_names = {name for _, name, _, _ in UNIT_VALUES_STEP_04 + UNIT_VALUES_STEP_07}
+    row_names = {name for _, name, _, _ in ROW_VALUES_STEP_17}
+    summable = {"s17_esperado_unidades", "s17_esperado_usd", "s17_esperado_usd_bajo", "s17_esperado_usd_alto"}
     for block_specs in blocks_present:
         for _, name, step, description in block_specs:
+            if name in row_names:
+                legend_rows.append((name, step, LEVEL_ROW, AGGREGATE_SUM if name in summable else AGGREGATE_SLICER
+                                    if name in ("s17_origen_tasa", "s17_tecnica", "s15_via_uplift", "s17_h")
+                                    else "no sumar: valor de la fila (una tasa o un uplift)", description))
+                continue
             level = LEVEL_UNIT if name in unit_names else LEVEL_SERIES
             legend_rows.append((name, step, level, AGGREGATE_ATTRIBUTE, description))
     legend = pd.DataFrame(legend_rows, columns=["columna", "paso", "nivel", "como_agregar", "descripcion"])
@@ -332,7 +361,7 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
     #     a gap is not a unit of step 04, so the unit blocks are checked on the rows of the extract
     unit_names = {name for _, name, _, _ in UNIT_VALUES_STEP_04 + UNIT_VALUES_STEP_07}
     first_columns = [block_specs[0][1] for block_specs in blocks_present if block_specs and block_specs[0][1] in core.columns
-                     and not block_specs[0][1].startswith(("s13_", "s14_"))]
+                     and not block_specs[0][1].startswith(("s13_", "s14_", "s17_"))]
     series_columns = [name for name in first_columns if name not in unit_names]
     unit_columns = [name for name in first_columns if name in unit_names]
     raw_rows = core[ROW_ORIGIN_COLUMN] == ROW_FROM_RAW

@@ -220,6 +220,15 @@ class Config:
     # ─── the dynamics of the rate (step 13): descriptive, it does NOT restrict any technique ───
     dynamics_min_months: int = 24         # months a pool needs to measure its month effect (two of each month)
     dynamics_significance: float = 0.05   # a month effect or a trend is declared when its p-value is below this
+    # ─── the uplift (steps 15 and 16) ───
+    uplift_floor: float = 30.0            # renewers a cell needs to use its own uplift; below, its parent's (tramo kept)
+    uplift_cap: float = 3.0               # an uplift is clipped to [0.01, 3]: a renewer never pays 3× what fell due
+    uplift_bootstrap_samples: int = 200   # resamples of the renewer rows for the uplift band (p5-p95)
+    random_seed: int = 42                 # the bootstrap is reproducible
+    contract_apply_realization_ratio: bool = False   # contract path: 1/(1−d) as is (False) or × the cell's observed ratio
+    # ─── the forecast (step 17) ───
+    apply_credibility_shift: bool = True  # a series that borrows keeps z × its own difference of level with the pool
+                                          # (logit scale); False = it takes the pool's prediction as is
     # ─── the backtest of the rate (step 14) ───
     challenger_technique: str = "T3_ma3"  # the technique to beat: the moving average of 3 months (what a spreadsheet does)
     backtest_selection_months: int = 6    # closed months BEFORE the exam used as targets to CHOOSE the technique

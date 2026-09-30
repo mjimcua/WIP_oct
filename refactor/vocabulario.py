@@ -133,3 +133,19 @@ TABLE_POOL_DYNAMICS = "dinamica_pool"                    # step 13: φ, trend, s
 # ─── the report ──────────────────────────────────────────────────────────────────
 TABLE_SERIES_CARD = "ficha_serie"            # one row per series: every attribute the framework knows about it
 REPORT_FILE_NAME = "informe_sff.md"          # the report, in the output folder
+
+# ─── steps 15-18: uplift, forecast, validation ───────────────────────────────────
+UPLIFT_OWN, UPLIFT_PARENT, UPLIFT_CELL, UPLIFT_GLOBAL = "propia", "padre", "celda", "global"   # where a cell's uplift comes from
+PATH_STATISTICAL = "estadistica"             # uplift observed in the past renewals of the cell
+PATH_CONTRACT = "contrato"                   # uplift of the contract: 1 / (1 − discount)
+RATE_FROM_POOL = "pool"                      # the rate comes from the technique chosen for the series' estimation id
+RATE_FROM_CELL = "celda_mandatory"           # no pool: the rate of its mandatory cell
+RATE_FROM_GLOBAL = "global"                  # nothing else: the rate of the whole portfolio
+
+TABLE_UPLIFT_CELLS = "uplift_celda"          # step 15: the uplift of every uplift cell
+TABLE_CONTRACT_CHECK = "uplift_contrato_check"   # step 15: the contract rule against the past renewals
+TABLE_UPLIFT_BACKTEST = "backtest_uplift"    # step 16: statistical vs contract in the exam months
+TABLE_FORECAST = "forecast"                  # step 17: every future fine row with its forecast and bands
+TABLE_FORECAST_MONTH = "forecast_mes"        # step 17: the total by month with its bands
+TABLE_BUSINESS_SUMMARY = "resumen_negocio"   # step 17: the answers by year
+TABLE_VALIDATION = "validacion"              # step 18: the final checks across steps

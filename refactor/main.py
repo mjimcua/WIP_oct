@@ -32,6 +32,10 @@ from step_11_ladder import climb_the_ladder
 from step_12_pool_series import build_pool_series
 from step_13_dynamics import measure_dynamics
 from step_14_backtest import run_backtest
+from step_15_uplift import estimate_uplift
+from step_16_uplift_backtest import backtest_uplift
+from step_17_forecast import assemble_forecast
+from step_18_validation import validate_chain
 from step_nucleo import build_core_table
 from step_informe import build_report
 
@@ -147,12 +151,16 @@ def run(configuration: Config) -> dict:
     pool_series, pool_reference = build_pool_series(rated_units, relatives, pools, series_estimate, configuration)   # step 12
     pool_dynamics, portfolio_profile, portfolio_dynamics = measure_dynamics(pool_series, pool_reference, configuration)   # step 13
     backtest = run_backtest(pool_series, pool_reference, configuration)                            # step 14
+    uplift_cells, contract_check = estimate_uplift(fine_table, configuration)                       # step 15
+    uplift_backtest, uplift_verdict = backtest_uplift(fine_table, configuration)                     # step 16
+    forecast = assemble_forecast(fine_table, forecast_units, series_estimate, pool_series, pool_reference, backtest,
+                                 uplift_cells, uplift_verdict, rated_units, configuration)          # step 17
     core, core_legend = build_core_table(fine_table, configuration, forecast_units=forecast_units,
                                          support_bound=support_bound, rated_units=rated_units,
                                          series_table=series_table, series_rate=series_rate,
                                          series_estimate=series_estimate, pool_dynamics=pool_dynamics,
                                          technique_decision=backtest["decision"],
-                                         exam_by_pool=backtest["exam_by_pool"])                     # the core, last
+                                         exam_by_pool=backtest["exam_by_pool"], forecast=forecast["forecast"])   # the core
     results = dict(core=core, core_legend=core_legend, pool_series=pool_series, pool_reference=pool_reference,
                    backtest=backtest, pool_dynamics=pool_dynamics, portfolio_profile=portfolio_profile,
                    portfolio_dynamics=portfolio_dynamics, relatives=relatives, pools=pools,
@@ -160,6 +168,9 @@ def run(configuration: Config) -> dict:
                    dimension_decision=dimension_decision, dimension_pairs=dimension_pairs,
                    raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
                    series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
+    results.update(uplift_cells=uplift_cells, contract_check=contract_check, uplift_backtest=uplift_backtest,
+                   uplift_verdict=uplift_verdict, forecast=forecast)
+    results["validation"] = validate_chain(raw, results, configuration)                            # step 18
     results["card"] = build_report(raw, results, configuration)                                   # the report, last
     return results
 
