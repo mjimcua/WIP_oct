@@ -10,7 +10,8 @@ Which months each check looks at:
     they are early results that step 02 wipes, so they are not checked.
 
 Actions (logged as they are done):
-  1. split the closed months (before the current one) from the rest
+  1. scope the renewal checks: renewals are checked only in months before the current one
+     (from the current month on they are partial and step 02 wipes them)
   2. check the money: pipeline, every month; renewals, closed months        checks 1-10
   3. check the dimensions and the flags                                     checks 11-16
   4. check the exact discount, if declared                                  check 17
@@ -39,7 +40,7 @@ Output: the raw, unchanged (nothing is written).
 # ─── imports ─────────────────────────────────────────────────────────────────────
 import pandas as pd
 
-from config import Config
+from config import ACTIVE_FLAG_VALUES, Config
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -47,7 +48,8 @@ STEP_LABEL = "01"
 STEP_NAME = "VALIDATE VALUES"
 STEP_PURPOSE = ("check that the values inside the raw can be computed with: money without nulls or negatives, "
                 "renewals coherent with what fell due, dimensions never empty, flags 0 / 1, discount as a share")
-STEP_ACTIONS = ["split the closed months (before the current one) from the rest",
+STEP_ACTIONS = ["scope the renewal checks: renewals are checked only in months before the current one "
+                "(from the current month on they are partial and step 02 wipes them)",
                 "check the money: pipeline every month, renewals in closed months (checks 1-10)",
                 "check the dimensions and the flags (checks 11-16)",
                 "check the exact discount, if declared (check 17)",
@@ -66,13 +68,16 @@ def validate_values(validated: pd.DataFrame, configuration: Config) -> pd.DataFr
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
     check_log = []
 
-    # [1] the closed months: renewals are only checked there
+    # [1] the scope of the renewal checks: the months before the current one. From the current
+    #     month on the renewals are partial (the month is still running) and step 02 wipes them,
+    #     so only the pipeline is checked there
     current_month = configuration.calendar_boundaries()["current"]
     closed_rows = validated[validated[configuration.period_col] < current_month]
     renewed_units = closed_rows[configuration.renewed_units_col]
     renewed_usd = closed_rows[configuration.renewed_usd_col]
-    configuration.log_action(STEP_LABEL, 1, f"{len(closed_rows):,} rows in closed months (before {current_month}) · "
-                                            f"{len(validated) - len(closed_rows):,} rows from {current_month} on")
+    configuration.log_action(STEP_LABEL, 1, f"renewals checked in {len(closed_rows):,} rows before {current_month} · "
+                                            f"{len(validated) - len(closed_rows):,} rows from {current_month} on: pipeline only, "
+                                            f"renewals wiped in step 02")
 
     # [2] the money
     configuration.log_action(STEP_LABEL, 2, "checking the money")
@@ -135,7 +140,7 @@ def validate_values(validated: pd.DataFrame, configuration: Config) -> pd.DataFr
                                 not unexpected_values and not has_nulls,
                                 failure_detail=f"{dichotomous_column} must be 0 / 1: found {unexpected_values[:10]}"
                                                f"{' and nulls' if has_nulls else ''}",
-                                context=f"{int(values.isin([1, True, '1']).mean() * 100)} % of rows at 1")
+                                context=f"{int(values.isin(ACTIVE_FLAG_VALUES).mean() * 100)} % of rows at 1")
 
     # [4] the exact discount: a share between 0 and 1, or null (unknown)
     if configuration.discount_value_column:

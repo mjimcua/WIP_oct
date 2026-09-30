@@ -6,14 +6,15 @@ the tables, of the report and of the BI). Grows with the steps that need a new l
 # ─── the role of every month (generated from the calendar of the configuration) ──
 ROLE_TRAIN = "entrenamiento"          # closed months the forecast learns from
 ROLE_TEST = "examen"                  # closed months that only evaluate
-ROLE_PENDING = "pendiente_cierre"     # not closed yet: neither learn nor evaluate
 ROLE_PROJECTION = "proyeccion"        # the current month and the future
 
 # ─── the columns step 02 adds to the raw ─────────────────────────────────────────
-CALENDAR_ROLE_COLUMN = "rol"                          # the role of the row's month (the four above)
+CALENDAR_ROLE_COLUMN = "rol"                          # the role of the row's month (the three above)
 CURRENT_MONTH_COLUMN = "es_mes_en_curso"              # 1 in the current month, 0 elsewhere
 S0_RENEWED_UNITS_COLUMN = "s0_renovados_unidades"     # the raw's renewed units, before step 02 touches them
 S0_RENEWED_USD_COLUMN = "s0_renovados_usd"            # the raw's renewed USD, before step 02 touches them
+S0_PIPELINE_UNITS_COLUMN = "s0_vencen_unidades"   # the pipeline as the raw had it (step 02 wipes what is not known yet)
+S0_PIPELINE_USD_COLUMN = "s0_vencen_usd"
 
 # ─── the ids and keys step 03 adds (kept in English: the BI joins on these names) ─
 SERIES_ID_COLUMN = "fs_id"                   # the rate series: mandatory | timevarying | extra_renovacion
@@ -29,7 +30,7 @@ TABLE_CALENDAR = "calendario"                # step 02: one row per month, its r
 TABLE_FINE = "fact_fine"                     # step 03: every raw row with its ids and keys
 
 # The four roles in time order (coverage patterns and tables follow it).
-ROLES_IN_ORDER = [ROLE_TRAIN, ROLE_TEST, ROLE_PENDING, ROLE_PROJECTION]
+ROLES_IN_ORDER = [ROLE_TRAIN, ROLE_TEST, ROLE_PROJECTION]
 
 # ─── the columns steps 04 and 06 add ─────────────────────────────────────────────
 FINE_ROWS_COLUMN = "n_filas_finas"           # step 04: fine rows added into a forecast unit
@@ -158,5 +159,29 @@ METHOD_FRAMEWORK = "framework"
 # ─── the extended horizon (step 17) ──────────────────────────────────────────────
 PIPELINE_ORIGIN_COLUMN = "origen_pipeline"   # where the pipeline of a future row comes from
 PIPELINE_REAL = "real"                       # in the extract (known)
-PIPELINE_PROJECTED = "proyectada"            # a renewal (real or expected) that falls due again after its term
-PIPELINE_SIMULATED = "simulada"              # acquisition pipeline copied from the same month a year before
+PIPELINE_PROJECTED = "proyectada"            # an expected renewal of the simulation window, due 12 months later
+PIPELINE_SIMULATED = "simulada"              # an acquisition simulated in the simulation window, due 12 months later
+
+# ─── step 20: the time_series universe (retail to subscription) and the total ────
+TS_REAL = "ts_real"                          # closed months of the year: real conversions (revenue of the year)
+TS_PROJECTED = "ts_proyectado"               # current month → ts_projection_end: simulated conversions (revenue of the year)
+TS_REENTRY = "ts_reentrada"                  # a projected month falling due 12 months later, renewed at the region's rate
+ORIGIN_PIPELINE_RENEWED = "pipeline_renovado_real"     # renewals already booked in the closed months (normal universe)
+ORIGIN_PIPELINE_EXPECTED = "pipeline_esperado"         # expected renewals of the extract's future pipeline
+ORIGIN_EXTENDED_PROJECTED = "extendido_reentrada"      # expected renewals of the extended horizon's re-entries
+ORIGIN_EXTENDED_SIMULATED = "extendido_captacion"      # expected renewals of the extended horizon's simulated acquisition
+ORIGIN_TOTAL = "TOTAL"
+TABLE_TIME_SERIES = "time_series"            # step 20: one row per region × month of the time_series universe
+TABLE_FORECAST_TOTAL = "forecast_total"      # step 20: year × origin, units and USD, and the total of every year
+
+# ─── step 20: the time_series universe (retail to subscription) and the forecast total ──
+TS_REAL = "ts_real"                          # revenue of the time_series universe in the closed months of the year
+TS_PROJECTED = "ts_proyectado"               # simulated revenue from the current month to ts_projection_end
+TS_REENTRY = "ts_reentrada"                  # the projected months falling due again a year later, as pipeline
+TOTAL_ORIGIN_RENEWED = "pipeline_renovado_real"      # renewals already booked in the closed months (normal universe)
+TOTAL_ORIGIN_EXPECTED = "pipeline_real_esperado"     # expected renewals of the extract's future pipeline
+TOTAL_ORIGIN_PROJECTED = "pipeline_proyectada"       # expected renewals of the extended re-entries
+TOTAL_ORIGIN_SIMULATED = "pipeline_simulada"         # expected renewals of the simulated acquisition
+TOTAL_ORIGIN_TOTAL = "TOTAL"
+TABLE_TIME_SERIES = "time_series"            # step 20: region × month: origin, units, value, level, AUV, discount, rate
+TABLE_FORECAST_TOTAL = "forecast_total"      # step 20: year × origin and the total of every year

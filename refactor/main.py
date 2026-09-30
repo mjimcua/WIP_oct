@@ -1,7 +1,7 @@
 """
-main.py — Runs SFF on Kamelot, or on the synthetic raw.
+main.py — Runs SFF on the production extract, or on the synthetic raw.
 
-    python main.py              # Kamelot (SQL Server)
+    python main.py              # the production extract (SQL Server)
     python main.py sintetico    # the synthetic raw of the tests
 
 The Config is declared here and only here: its columns, its calendar and where the raw
@@ -37,14 +37,15 @@ from step_16_uplift_backtest import backtest_uplift
 from step_17_forecast import assemble_forecast
 from step_18_validation import validate_chain
 from step_19_portfolio_exam import examine_portfolio
+from step_20_time_series import build_time_series_and_total, split_time_series_rows
 from step_nucleo import build_core_table
 from step_informe import build_report
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-KAMELOT_SERVER = "..."                      # [por completar]
-KAMELOT_DATABASE = "Kamelot"
-KAMELOT_DRIVER = "ODBC Driver 17 for SQL Server"
+SQL_SERVER = "..."                          # [por completar]
+SQL_DATABASE = "..."                        # [por completar]
+SQL_DRIVER = "ODBC Driver 17 for SQL Server"
 RAW_EXTRACT_QUERY = "SELECT * FROM ..."     # [por completar] the query of the raw extract
 SYNTHETIC_KEYWORD = "sintetico"
 SYNTHETIC_OUTPUT_FOLDER = "salida"
@@ -55,14 +56,16 @@ SYNTHETIC_DATABASE = os.path.join(SYNTHETIC_OUTPUT_FOLDER, "sff_sintetico.db")
 # THE TWO CONFIGS
 # ═══════════════════════════════════════════════════════════════════════════════════
 
-def kamelot_engine():
-    """The SQL Server of Kamelot: the raw is read from it and the tables are written to it."""
-    connection_url = (f"mssql+pyodbc://@{KAMELOT_SERVER}/{KAMELOT_DATABASE}"
-                      f"?driver={KAMELOT_DRIVER.replace(' ', '+')}&trusted_connection=yes")
+def production_engine():
+    """The production SQL Server: the raw is read from it and the tables are written to it.
+    fast_executemany: pyodbc sends every chunk of to_sql in one round trip (without it, one
+    INSERT per row: a table of a million rows takes minutes instead of seconds)."""
+    connection_url = (f"mssql+pyodbc://@{SQL_SERVER}/{SQL_DATABASE}"
+                      f"?driver={SQL_DRIVER.replace(' ', '+')}&trusted_connection=yes")
     return create_engine(connection_url, fast_executemany=True)
 
 
-class KamelotConfig(Config):
+class ProductionConfig(Config):
     def read_raw(self) -> pd.DataFrame:
         return pd.read_sql(self.raw_extract_sql, self.sql_engine)
 
@@ -73,18 +76,17 @@ class SyntheticConfig(Config):
         return build_raw(7, with_discount_pct=True)
 
 
-def kamelot_configuration() -> Config:
-    """The Kamelot extract, as seen in the runs of 29-sep. Names marked [por confirmar]
+def production_configuration() -> Config:
+    """The production extract, as seen in the runs of 29-sep. Names marked [por confirmar]
     must be checked against it: step 00 names every column that is missing or has no role."""
-    return KamelotConfig(
+    return ProductionConfig(
         # where the raw is read from and the tables are written to
-        sql_engine=kamelot_engine(),
+        sql_engine=production_engine(),
         sql_schema="dbo",
         raw_extract_sql=RAW_EXTRACT_QUERY,
         # the calendar
         current_month="01/09/2026",
         test_months=3,
-        pending_close_months=0,
         # the dimensions
         business_mandatory_dims=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3",
                                  "tr_product_level_1", "tr_product_level_2", "tr_purchase_type", "tr_renewal_type",
@@ -100,12 +102,14 @@ def kamelot_configuration() -> Config:
         # the other columns of the extract
         extra_measure_cols=["total_reacquired_units", "total_reacquired_usd", "TR_AUV", "REN_AUV", "ReAC_AUV"],
         ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
-        # the extended horizon: the whole of 2027 (the extract carries the pipeline up to 2027-08)
-        extended_horizon_end="2027-12",
+        # the simulation window (current month → December): what happens in it falls due in 2027
         term_column="tr_term_level_2",
-        term_months_by_value={"1 year": 12, "2 year": 24, "3 year": 36},               # [por confirmar] the values
-        reentry_overrides={"tr_purchase_type": "Renewal"},                              # [por confirmar] the value
-        acquisition_row_filter={"tr_purchase_type": ["Acquisition"]},                   # [por confirmar] the values
+        one_year_term_value="1 year",
+        acquisition_column="net_new",
+        acquisition_values=["Acquisition_Not-New", "Acquisition_Pure-New"],
+        acquisition_discount=0.4,
+        # the time_series universe (retail to subscription): its region and its projection
+        ts_region_columns=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3"],   # projected by country
     )
 
 
@@ -117,7 +121,6 @@ def synthetic_configuration() -> Config:
         sql_engine=create_engine(f"sqlite:///{SYNTHETIC_DATABASE}"),
         current_month="2026-09",
         test_months=3,
-        pending_close_months=0,
         business_mandatory_dims=["region", "product"],
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",
                                      "no_instalado": "negative", "autorenew": "positive"},
@@ -127,10 +130,9 @@ def synthetic_configuration() -> Config:
         # discount: the framework derives the bucket, so the synthetic's is ignored
         discount_value_column="discount_pct",
         ignore_cols=["dataset_role", "is_current_month", "discount"],
-        # the extended horizon: the whole of 2027; a new customer who renews is no longer new
-        extended_horizon_end="2027-12",
-        reentry_overrides={"newcust": 0},
-        acquisition_row_filter={"newcust": [1]},
+        # the simulation window: acquisitions are newcust = 1
+        acquisition_column="newcust",
+        acquisition_values=[1],
     )
 
 
@@ -147,6 +149,7 @@ def run(configuration: Config) -> dict:
                              f"({time.time() - read_start_time:.1f}s)")
 
     validated_raw = validate_raw(raw, configuration)                     # step 00
+    validated_raw, time_series_rows = split_time_series_rows(validated_raw, configuration)   # the time_series universe waits for step 20
     validated_raw = validate_values(validated_raw, configuration)        # step 01
     calendared_raw = apply_calendar(validated_raw, configuration)        # step 02
     fine_table = build_fine_table(calendared_raw, configuration)         # step 03
@@ -166,13 +169,7 @@ def run(configuration: Config) -> dict:
     uplift_backtest, uplift_verdict = backtest_uplift(fine_table, configuration)                     # step 16
     forecast = assemble_forecast(fine_table, forecast_units, series_estimate, pool_series, pool_reference, backtest,
                                  uplift_cells, uplift_verdict, rated_units, configuration)          # step 17
-    core, core_legend = build_core_table(fine_table, configuration, forecast_units=forecast_units,
-                                         support_bound=support_bound, rated_units=rated_units,
-                                         series_table=series_table, series_rate=series_rate,
-                                         series_estimate=series_estimate, pool_dynamics=pool_dynamics,
-                                         technique_decision=backtest["decision"],
-                                         exam_by_pool=backtest["exam_by_pool"], forecast=forecast["forecast"])   # the core
-    results = dict(core=core, core_legend=core_legend, pool_series=pool_series, pool_reference=pool_reference,
+    results = dict(pool_series=pool_series, pool_reference=pool_reference,
                    backtest=backtest, pool_dynamics=pool_dynamics, portfolio_profile=portfolio_profile,
                    portfolio_dynamics=portfolio_dynamics, relatives=relatives, pools=pools,
                    series_estimate=series_estimate, money_by_level=money_by_level,
@@ -183,6 +180,15 @@ def run(configuration: Config) -> dict:
                    uplift_verdict=uplift_verdict, forecast=forecast)
     results["portfolio_exam"], results["portfolio_exam_summary"] = examine_portfolio(
         rated_units, series_estimate, pool_series, backtest, configuration)                          # step 19
+    results["time_series"], results["forecast_total"] = build_time_series_and_total(
+        time_series_rows, fine_table, forecast["forecast"], configuration)                      # step 20
+    results["time_series_rows"] = time_series_rows
+    results["core"], results["core_legend"] = build_core_table(
+        fine_table, configuration, forecast_units=forecast_units, support_bound=support_bound, rated_units=rated_units,
+        series_table=series_table, series_rate=series_rate, series_estimate=series_estimate, pool_dynamics=pool_dynamics,
+        technique_decision=backtest["decision"], exam_by_pool=backtest["exam_by_pool"], forecast=forecast["forecast"],
+        time_series_rows=time_series_rows, time_series_table=results["time_series"],
+        forecast_total=results["forecast_total"])                                                  # the core: every row, every decision
     results["validation"] = validate_chain(raw, results, configuration)                            # step 18 (after 19: it reads its exam)
     results["card"] = build_report(raw, results, configuration)                                   # the report, last
     return results
@@ -192,4 +198,4 @@ if __name__ == "__main__":
     if SYNTHETIC_KEYWORD in sys.argv[1:]:
         run(synthetic_configuration())
     else:
-        run(kamelot_configuration())
+        run(production_configuration())

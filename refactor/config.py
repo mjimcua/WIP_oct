@@ -48,7 +48,7 @@ import numpy as np
 import pandas as pd
 
 from logging_helpers import DOC_LEVEL, LoggerManager
-from vocabulario import ROLE_PENDING, ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN
+from vocabulario import ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN
 
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -131,6 +131,13 @@ def discount_bucket_labels(discount_values: pd.Series, bucket_edges_pct: list) -
     return buckets
 
 
+def is_one_year(rows: pd.DataFrame, configuration) -> pd.Series:
+    """The rows of a 1-year licence (term_column = one_year_term_value); every row when there is no term column."""
+    if configuration.term_column and configuration.term_column in rows.columns:
+        return rows[configuration.term_column].astype(str) == str(configuration.one_year_term_value)
+    return pd.Series(True, index=rows.index)
+
+
 def join_columns(frame: pd.DataFrame, columns: list) -> pd.Series:
     """The "|"-joined id of every row from several columns, in the given order (the order
     is part of the id); a null value is written "null". Built on arrays, not Series, so a
@@ -198,9 +205,11 @@ class Config:
     ignore_cols: list = field(default_factory=list)   # read by nobody; may be absent from the raw
 
     # ─── the calendar (the role of every month is generated from it) ────────────────
-    current_month: Optional[str] = None   # first month of the future; no default on purpose
+    current_month: Optional[str] = None   # first month of the future; no default on purpose. If the last months
+                                          # are not mature yet (late renewals still arriving), set current_month to the
+                                          # first immature one: it becomes proyeccion, is predicted, and its partial
+                                          # renewals are wiped in step 02. "Closed" always means: before current_month
     test_months: int = 3                  # closed months before it that only evaluate
-    pending_close_months: int = 0         # months before the exam not closed yet (0 = all closed)
 
     # ─── statistical parameters ────────────────────────────────────────────────────
     z: float = 1.645                      # 90 % two-sided: every band and every binomial error uses it
@@ -227,20 +236,35 @@ class Config:
     random_seed: int = 42                 # the bootstrap is reproducible
     contract_apply_realization_ratio: bool = False   # contract path: 1/(1−d) as is (False) or × the cell's observed ratio
     # ─── the forecast (step 17) ───
-    extended_horizon_end: Optional[str] = None    # forecast beyond the extract up to this month ("2027-12"); None = the extract only
-    term_column: Optional[str] = None             # the column with the contract term; None = every contract lasts default_term_months
-    term_months_by_value: dict = field(default_factory=lambda: {"1 year": 12, "2 year": 24, "3 year": 36})
-    default_term_months: int = 12                 # the term of a value not in the mapping (or with no term column)
-    reentry_overrides: dict = field(default_factory=dict)       # dims a renewal takes when it falls due again
-                                                                # (e.g. purchase type → renewal); {} = it keeps its dims
-    acquisition_row_filter: dict = field(default_factory=dict)  # the rows that are acquisition pipeline ({column: [values]});
-                                                                # {} = no acquisition is simulated
+    # the SIMULATION WINDOW: from the current month (included) to simulation_end. What happens in it
+    # (renewals of 1-year licences, acquisitions, time_series conversions) falls due 12 months later
+    simulation_end: Optional[str] = None          # the last month simulated; None = December of the current month's year
+    term_column: Optional[str] = None             # the column with the term of the licence; None = every licence is of 1 year
+    one_year_term_value: str = "1 year"           # the value of term_column that means a 1-year licence (only those re-enter)
+    renewal_reentry_discount: float = 0.0         # a renewal falls due again at the price it renewed: no discount
+    acquisition_column: Optional[str] = None      # the column that says a row is an acquisition; None = no acquisition simulated
+    acquisition_values: list = field(default_factory=list)      # its values that are acquisition: each one is simulated apart
+                                                                # (they have different proportions)
+    acquisition_discount: float = 0.4             # an acquisition is sold with this discount (it renews without it)
+    acquisition_level_window_months: int = 3      # acquisition level: last 3 closed months vs the same months a year before
+    acquisition_auv_window_months: int = 12       # acquisition value per unit: Σ value / Σ units of the last 12 closed months
     apply_credibility_shift: bool = True  # a series that borrows keeps z × its own difference of level with the pool
                                           # (logit scale); False = it takes the pool's prediction as is
+
     # ─── the spreadsheet baseline (step 19): what the business does today ───
     baseline_months: int = 12             # the rate of the last N closed months… (what the business does: 12 months per cell)
     baseline_grains: list = field(default_factory=lambda: ["mandatory", "global"])   # …per grain: "global", "mandatory"
                                           # (every mandatory dim) or columns joined with "+" (e.g. "region+product")
+    # ─── the time_series universe: retail to subscription (step 20) ───
+    ts_region_columns: list = field(default_factory=list)   # the region levels of a time_series row, coarse to fine;
+                                              # [] = the first mandatory dim. The projection is made at the FINEST level and
+                                              # the renewal rate climbs fine → coarse → global; the same columns must be in
+                                              # the normal pipeline (its rate is read there)
+    ts_level_window_months: int = 3           # the level: the last 3 closed months of this year vs the same months of last
+                                              # year (recent enough to follow the campaigns, long enough not to be one month)
+    ts_auv_window_months: int = 12            # the value per unit: Σ value / Σ units of the last 12 closed months (a year)
+    ts_rate_window_months: int = 12           # the renewal rate of the region in the normal pipeline: last 12 closed months
+    ts_acquisition_discount: float = 0.4      # retail-to-subscription offers: acquired at 40 % off, renewed at 100 %
     # ─── the backtest of the rate (step 14) ───
     challenger_technique: str = "T3_ma3"  # the technique to beat: the moving average of 3 months (what a spreadsheet does)
     backtest_selection_months: int = 6    # closed months BEFORE the exam used as targets to CHOOSE the technique
@@ -273,6 +297,13 @@ class Config:
         """The raw extract. Overridden by the Config of main.py (SQL, CSV, synthetic)."""
         raise NotImplementedError("override read_raw() in your Config subclass (main.py)")
 
+    def read_time_series(self) -> Optional[pd.DataFrame]:
+        """The history of the time_series universe (retail-to-subscription conversions), one row
+        per region × month with the columns: period, region, unidades, valor. Overridden by the
+        Config of main.py when it comes from its own query. None (the default) = step 20 takes it
+        from the rows of the raw with the time_series flag."""
+        return None
+
     # ═══════════════════════════════════════════════════════════════════════════════
     # THE COLUMN CONTRACT
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -304,10 +335,13 @@ class Config:
         edges = list(self.discount_bucket_edges)
         if edges != sorted(set(edges)) or edges[0] != 0 or edges[-1] != 100:
             raise ValueError(f"discount_bucket_edges must go up strictly from 0 to 100 (in %): {edges}")
+        for discount_name in ("acquisition_discount", "renewal_reentry_discount"):
+            if not (0 <= float(getattr(self, discount_name)) < 1):
+                raise ValueError(f"{discount_name} must be in [0, 1) (found {getattr(self, discount_name)})")
+        if not (0 <= float(self.ts_acquisition_discount) < 1):
+            raise ValueError(f"ts_acquisition_discount must be in [0, 1) (found {self.ts_acquisition_discount})")
         if int(self.test_months) < 1:
             raise ValueError(f"test_months must be at least 1 (found {self.test_months}): without an exam nothing is evaluated")
-        if int(self.pending_close_months) < 0:
-            raise ValueError(f"pending_close_months cannot be negative (found {self.pending_close_months})")
 
     @property
     def logger(self) -> logging.Logger:
@@ -407,6 +441,8 @@ class Config:
 
         write_start_time = time.time()
         if self.sql_engine is not None:
+            # chunks of 10,000 rows; with an engine created with fast_executemany=True (see main.py),
+            # pyodbc sends each chunk in one round trip instead of one INSERT per row
             persisted_frame.to_sql(physical_name, self.sql_engine, schema=self.sql_schema,
                                    if_exists="replace", index=False, chunksize=10_000)
             qualified_name = f"{self.sql_schema}.{physical_name}" if self.sql_schema else physical_name
@@ -451,6 +487,13 @@ class Config:
         extra_renovacion, extra_revalorizacion."""
         return list(dict.fromkeys(self.business_mandatory_dims + list(self.structural_timevarying_dims)
                                   + self.extra_renovacion + self.extra_revalorizacion))
+
+    @property
+    def simulation_window(self) -> list:
+        """The months simulated: from the current month (included) to simulation_end (December by default)."""
+        current = self.calendar_boundaries()["current"]
+        end = parse_month(self.simulation_end) if self.simulation_end else pd.Period(f"{current.year}-12", freq="M")
+        return list(pd.period_range(current, end, freq="M")) if end >= current else []
 
     @property
     def uplift_cell_columns(self) -> list:
@@ -525,35 +568,29 @@ class Config:
     # ═══════════════════════════════════════════════════════════════════════════════
 
     def calendar_boundaries(self) -> dict:
-        """The three months that cut the calendar: current (first month of projection),
-        pending_start (first pending month; = current when there is none) and test_start
-        (first exam month). Raises ValueError when current_month is not declared."""
+        """The two months that cut the calendar: current (the first month of projection; every
+        month before it is closed) and test_start (the first exam month: current − test_months).
+        Raises ValueError when current_month is not declared."""
         if self.current_month is None:
             raise ValueError("current_month is not declared: set it in your Config "
                              "(e.g. current_month=\"2026-09\" or \"01/09/2026\")")
         current = parse_month(self.current_month)
-        pending_start = current - int(self.pending_close_months)
-        test_start = pending_start - int(self.test_months)
-        return dict(current=current, pending_start=pending_start, test_start=test_start)
+        test_start = current - int(self.test_months)
+        return dict(current=current, test_start=test_start)
 
     def role_of_months(self, periods) -> np.ndarray:
-        """The role of every month: ≥ current → proyeccion · ≥ pending_start →
-        pendiente_cierre · ≥ test_start → examen · earlier → entrenamiento."""
+        """The role of every month: ≥ current → proyeccion · ≥ test_start → examen ·
+        earlier → entrenamiento."""
         boundaries = self.calendar_boundaries()
         month_values = pd.Series(periods).reset_index(drop=True)
         # np.select takes the FIRST condition that holds, so the order is the rule
         conditions = [month_values >= boundaries["current"],
-                      month_values >= boundaries["pending_start"],
                       month_values >= boundaries["test_start"]]
-        return np.select(conditions, [ROLE_PROJECTION, ROLE_PENDING, ROLE_TEST], default=ROLE_TRAIN)
+        return np.select(conditions, [ROLE_PROJECTION, ROLE_TEST], default=ROLE_TRAIN)
 
     def calendar_description(self) -> str:
         """The calendar in one line, for the console."""
         boundaries = self.calendar_boundaries()
-        current, pending_start, test_start = boundaries["current"], boundaries["pending_start"], boundaries["test_start"]
-        if self.pending_close_months > 0:
-            pending_text = f"{ROLE_PENDING} {pending_start}..{current - 1}"
-        else:
-            pending_text = f"{ROLE_PENDING}: none"
-        return (f"{ROLE_TRAIN} ≤ {test_start - 1} · {ROLE_TEST} {test_start}..{pending_start - 1} · "
-                f"{pending_text} · {ROLE_PROJECTION} ≥ {current}")
+        current, test_start = boundaries["current"], boundaries["test_start"]
+        return (f"{ROLE_TRAIN} ≤ {test_start - 1} · {ROLE_TEST} {test_start}..{current - 1} · "
+                f"{ROLE_PROJECTION} ≥ {current}")

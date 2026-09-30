@@ -204,6 +204,10 @@ def chapter_raw(raw: pd.DataFrame, results: dict, configuration: Config) -> str:
              f"{early[S0_RENEWED_UNITS_COLUMN].sum():,.0f} unidades y ${early[S0_RENEWED_USD_COLUMN].sum():,.0f}. "
              f"El raw original queda en las columnas s0_.",
              ]
+    wiped_pipeline = fine["s0_vencen_usd"] - fine[configuration.pipeline_usd_col]
+    lines.append(f"- Pipeline de licencias de 1 año vendidas o renovadas desde el mes en curso (vence desde "
+                 f"{boundaries['current'] + 12}): **aún no se conoce**, se borra y se proyecta: **{int((wiped_pipeline != 0).sum()):,} "
+                 f"filas**, ${wiped_pipeline.sum():,.0f} (el raw la conserva en s0_vencen_*).")
     if configuration.discount_value_column:
         unknown = (fine[configuration.discount_bucket_column] == UNKNOWN_DISCOUNT_BUCKET).mean()
         lines.append(f"- Descuento: tramo derivado del descuento exacto con los cortes {configuration.discount_bucket_edges} %; "
@@ -349,7 +353,7 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
              "**Cómo se mide.** Cada pool con soporte se predice en meses que ya ocurrieron, sin mirar el futuro: para el mes T "
              "a horizonte h, cada técnica solo ve hasta T − h. Los meses de **selección** (los "
              f"{configuration.backtest_selection_months} anteriores al examen) eligen la técnica; los meses de **examen** "
-             f"({boundaries['test_start']} a {boundaries['pending_start'] - 1}) la miden sin que la haya visto. El error se "
+             f"({boundaries['test_start']} a {boundaries['current'] - 1}) la miden sin que la haya visto. El error se "
              "compara con el ruido binomial del mes (err_norm ≈ 1: tan cerca como permite el azar). Una técnica sustituye al "
              f"retador ({configuration.challenger_technique}) solo si le gana por un margen. Compiten todas las técnicas que "
              "la historia permite, también las de series temporales.", "",
@@ -408,13 +412,31 @@ def chapter_forecast(results: dict, configuration: Config, headline: list) -> st
              + (" (activado)" if configuration.apply_credibility_shift else " (desactivado)") + ". Sin id de estimación: la "
              "tasa de su celda mandatory. Las bandas: **lineal** (todos los errores en el mismo sentido, el peor caso) y "
              "**cuadratura** (errores independientes); la verdad está entre ambas.", "",
-             "**Horizonte extendido** (más allá del extracto, hasta "
-             f"{configuration.extended_horizon_end or '—'}): las renovaciones de m − T vuelven a vencer en m, T la duración del "
-             "contrato (reales si m − T está cerrado, esperadas si no; **proyectada**), y la pipeline de captación del mismo mes "
-             "del año anterior se copia (**simulada**). Cada mes se construye y se predice antes del siguiente.", "",
+             "**La ventana de simulación** (del mes en curso, incluido, a diciembre): lo que ocurre en ella vence doce "
+             "meses después. Las licencias de 1 año que vencen en la ventana renuevan como prevé el forecast y su "
+             "renovación vence el mismo mes del año siguiente, con las mismas dimensiones y descuento 0 (**proyectada**). "
+             "La captación de la ventana se simula por cada valor de captación (mismo mes del año anterior × nivel, valor "
+             f"medio de 12 meses, señales a 0, descuento {configuration.acquisition_discount:.0%}; **simulada**). La pipeline "
+             "de las licencias de 1 año vendidas o renovadas desde el mes en curso aún no se conoce: el paso 02 la borra "
+             "(el raw la conserva en s0_vencen_*) y se proyecta.", "",
              "**Por mes:**", "", markdown_table(by_month, 0),
              "**Por año** (lo renovado en los meses cerrados + lo esperado en los futuros):", "", markdown_table(by_year, 0),
              "**De dónde sale la tasa de las filas futuras:**", "", markdown_table(origins, 0)]
+    total = results.get("forecast_total")
+    if total is not None and len(total):
+        for _, row in total[total["origen"] == "TOTAL"].iterrows():
+            headline.append((f"TOTAL {int(row['ano'])} renovado + revenue time_series (pipeline {row['usd_vence']:,.0f} $)",
+                             f"${row['usd_renovado']:,.0f}"))
+        lines += ["**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `fin_ano` y `fin_origen`, "
+                  "comprobado en el núcleo: en Power BI, SUM(fin_renovado_usd) y SUM(fin_vence_usd)). Orígenes: renovaciones ya contabilizadas y "
+                  "esperadas de la pipeline real, reentradas y captación del horizonte extendido, y el universo time_series "
+                  "de retail a suscripción (ts_real y ts_proyectado cuentan como revenue del año, sin tasa; ts_reentrada es "
+                  "pipeline del año siguiente: comprado con descuento, renueva al 100 % con la tasa de su región). "
+                  "Total 2026 = renovaciones de la pipeline + ts_real + ts_proyectado · Total 2027 = forecast extendido + "
+                  "ts_reentrada. usd_vence: pipeline; usd_renovado: renovaciones o revenue:", "", markdown_table(total, 0)]
+        time_series = results.get("time_series")
+        if time_series is not None and len(time_series):
+            lines += ["**El universo time_series, región × mes:**", "", markdown_table(time_series, 2)]
     if validation is not None:
         lines += ["**Validación final de la cadena:**", "", markdown_table(validation)]
     return "\n".join(lines) + "\n"

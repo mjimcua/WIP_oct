@@ -169,7 +169,7 @@ def run_backtest(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, config
 def test_calendar(pool_series: pd.DataFrame, configuration: Config) -> tuple:
     """The selection months (the N closed months before the exam) and the exam months."""
     boundaries = configuration.calendar_boundaries()
-    exam_months = pd.period_range(boundaries["test_start"], boundaries["pending_start"] - 1, freq="M")
+    exam_months = pd.period_range(boundaries["test_start"], boundaries["current"] - 1, freq="M")
     selection_months = pd.period_range(boundaries["test_start"] - configuration.backtest_selection_months,
                                        boundaries["test_start"] - 1, freq="M")
     return list(selection_months), list(exam_months)

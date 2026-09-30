@@ -120,7 +120,7 @@ def build_rate_series(forecast_units: pd.DataFrame, series_table: pd.DataFrame, 
                                         rated_units[configuration.renewed_units_col] / pipeline_units.where(pipeline_units > 0),
                                         np.nan)
     configuration.log_action(STEP_LABEL, 3, f"rate computed in {int(rate_is_truth.sum()):,} units; null in the other "
-                                            f"{int((~rate_is_truth).sum()):,} (future, pending, gaps, nothing due)")
+                                            f"{int((~rate_is_truth).sum()):,} (future, gaps, nothing due)")
 
     # [4] the summary of every series
     series_rate = summarise_series(rated_units, series_table, configuration)

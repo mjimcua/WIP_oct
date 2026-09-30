@@ -2,15 +2,26 @@
 step_17_forecast.py — The forecast in money: every future row, its rate, its uplift, its
 expected renewals and its band; the total by month and by year.
 
-THE FUTURE ROWS: the fine rows of the extract from the current month on (pipeline 'real') and,
-when extended_horizon_end goes beyond the extract, the rows of the EXTENDED HORIZON, built
-month by month after the last month of the extract:
-  · proyectada  every renewal of month m − T (real if m − T is closed, expected otherwise)
-                falls due again in m, T = the term of its contract (term_column); its
-                pipeline is what it renewed (units and USD); its dims take reentry_overrides
-                (e.g. the purchase type becomes renewal); its exact discount is unknown
-  · simulada    the acquisition pipeline (acquisition_row_filter) of month m − 12 is copied
-                to m: new customers of this year fall due like last year's
+THE FUTURE ROWS: the fine rows of the extract from the current month on (pipeline 'real'),
+and the rows that the SIMULATION WINDOW creates. The window goes from the current month
+(included: it is simulated whole) to simulation_end (December). What happens in it falls due
+12 months later, and the extract cannot have it yet:
+  · proyectada  every 1-year licence (term_column = one_year_term_value) due in the window
+                renews as the forecast expects; its renewal falls due the same month next year,
+                with the same dims, units = expected renewed units,
+                value = expected renewed USD, discount renewal_reentry_discount (0)
+  · simulada    the acquisition of the window, simulated for every value of acquisition_column
+                in acquisition_values apart (they have different proportions): per group of
+                dims, units = units acquired the same month a year before × level (last 3
+                closed months vs the same months a year before), value = units × value per unit
+                (last 12 closed months); a group that cannot be projected takes its share of
+                the projected total of its acquisition value. The timevarying dims are 0 (no
+                signal on a new licence) and the discount is acquisition_discount (0.4). An
+                acquisition of month m is read in the extract as the pipeline it created: the
+                acquisition rows due in m + 12
+  The extract's own 1-year rows due 12 months after the window were created by events of the
+  window, not known yet: step 02 wiped their pipeline (the raw keeps it in s0_vencen_*).
+The time_series universe re-enters in step 20.
 Every future row, of the extract or extended, is then predicted the same way:
 
 For every future row:
@@ -65,12 +76,12 @@ sff_resumen_negocio.
 import numpy as np
 import pandas as pd
 
-from config import Config, discount_bucket_labels, join_columns, parse_month
+from config import ACTIVE_FLAG_VALUES, Config, discount_bucket_labels, is_one_year, join_columns, parse_month
 from step_14_backtest import band_of_horizon
 from techniques import inverse_logit, logit, predict_logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, PATH_CONTRACT, PATH_STATISTICAL, PIPELINE_ORIGIN_COLUMN,
                          PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_FROM_CELL,
-                         RATE_FROM_GLOBAL, RATE_FROM_POOL, ROLE_PENDING, ROLE_PROJECTION, SERIES_ID_COLUMN,
+                         RATE_FROM_GLOBAL, RATE_FROM_POOL, ROLE_PROJECTION, SERIES_ID_COLUMN,
                          TABLE_BUSINESS_SUMMARY, TABLE_FORECAST, TABLE_FORECAST_MONTH, TRUTH_ROLES, UNIT_ID_COLUMN,
                          UPLIFT_CELL_ID_COLUMN)
 
@@ -86,7 +97,7 @@ STEP_ACTIONS = ["the future rows of the extract",
                 "the rate of every future row (pool, cell or global) and its band",
                 "the uplift of every future row (contract or statistical) and its band",
                 "the expected renewals and their band, row by row",
-                "the extended horizon, month by month: renewals falling due again (proyectada) and last year's acquisition (simulada)",
+                "the simulation window: renewals of 1-year licences and acquisitions, due 12 months later",
                 "the totals by month and by year, by origin of the pipeline",
                 "check the forecast (checks 1-5)",
                 "write the forecast, the months and the summary (checks 6-8)",
@@ -106,13 +117,13 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
     check_log = []
     period_column = configuration.period_col
     boundaries = configuration.calendar_boundaries()
-    last_closed = boundaries["pending_start"] - 1
+    last_closed = boundaries["current"] - 1
     context = dict(series_estimate=series_estimate, pool_series=pool_series, pool_reference=pool_reference, backtest=backtest,
                    uplift_cells=uplift_cells, uplift_verdict=uplift_verdict, rated_units=rated_units,
                    forecast_units=forecast_units, last_closed=last_closed, pool_rate_cache={})
 
     # [1] the future rows of the extract
-    future = fine_table[fine_table[CALENDAR_ROLE_COLUMN].isin([ROLE_PENDING, ROLE_PROJECTION])].copy()
+    future = fine_table[fine_table[CALENDAR_ROLE_COLUMN] == ROLE_PROJECTION].copy()
     future["_fila"] = future.index
     future[PIPELINE_ORIGIN_COLUMN] = PIPELINE_REAL
     configuration.log_action(STEP_LABEL, 1, f"{len(future):,} future rows in the extract, {future[period_column].min()}.."
@@ -127,16 +138,17 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
     configuration.log_action(STEP_LABEL, 5, f"expected ${future['esperado_usd'].sum():,.0f} renewed of "
                                             f"${future[configuration.pipeline_usd_col].sum():,.0f} due in the extract")
 
-    # [6] the extended horizon, month by month
+    # [6] the simulation window: renewals and acquisitions that fall due 12 months later; the
+    #     extract rows of the target months that the simulation replaces
     extension = extend_horizon(fine_table, future, context, configuration)
     if len(extension):
         future = pd.concat([future, extension], ignore_index=True)
-        configuration.log_action(STEP_LABEL, 6, f"extended horizon {extension[period_column].min()}..{extension[period_column].max()}: "
-                                                f"{extension[PIPELINE_ORIGIN_COLUMN].value_counts().to_dict()} rows · "
-                                                f"${extension[configuration.pipeline_usd_col].sum():,.0f} due · "
-                                                f"${extension['esperado_usd'].sum():,.0f} expected")
-    else:
-        configuration.log_action(STEP_LABEL, 6, "no extended horizon (extended_horizon_end not beyond the extract)")
+    window = configuration.simulation_window
+    configuration.log_action(STEP_LABEL, 6, f"simulation window {window[0] if window else '—'}..{window[-1] if window else '—'} → "
+                                            f"due {window[0] + 12 if window else '—'}..{window[-1] + 12 if window else '—'}: "
+                                            f"{extension[PIPELINE_ORIGIN_COLUMN].value_counts().to_dict() if len(extension) else {}} rows · "
+                                            f"${extension[configuration.pipeline_usd_col].sum() if len(extension) else 0:,.0f} due · "
+                                            f"${extension['esperado_usd'].sum() if len(extension) else 0:,.0f} expected")
 
     # [7] the totals
     by_month, by_year = totals(future, fine_table, configuration)
@@ -144,7 +156,7 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
 
     # [8] the checks
     configuration.log_action(STEP_LABEL, 8, "checking the forecast")
-    check_forecast(future, fine_table, by_month, configuration, check_log)
+    check_forecast(future, future, fine_table, by_month, configuration, check_log)
 
     # [9] the tables
     configuration.log_action(STEP_LABEL, 9, "writing the forecast, the months and the summary")
@@ -199,92 +211,131 @@ def predict_rows(rows: pd.DataFrame, context: dict, configuration: Config) -> pd
 # THE EXTENDED HORIZON
 # ═══════════════════════════════════════════════════════════════════════════════════
 
-def term_months_of(rows: pd.DataFrame, configuration: Config) -> pd.Series:
-    """The term of the contract of every row, in months."""
-    if configuration.term_column and configuration.term_column in rows.columns:
-        return rows[configuration.term_column].astype(str).map(configuration.term_months_by_value).fillna(
-            configuration.default_term_months).astype(int)
-    return pd.Series(configuration.default_term_months, index=rows.index)
-
-
 def is_acquisition(rows: pd.DataFrame, configuration: Config) -> pd.Series:
-    """The rows that are acquisition pipeline (acquisition_row_filter); none when the filter is empty."""
-    if not configuration.acquisition_row_filter:
+    """The acquisition rows (acquisition_column in acquisition_values); none when it is not declared."""
+    if not configuration.acquisition_column or not configuration.acquisition_values:
         return pd.Series(False, index=rows.index)
-    mask = pd.Series(True, index=rows.index)
-    for column_name, values in configuration.acquisition_row_filter.items():
-        mask &= rows[column_name].isin(values)
-    return mask
+    return rows[configuration.acquisition_column].isin(configuration.acquisition_values)
+
+
+def inactive_value(values: pd.Series):
+    """The value that means 'flag off' in a timevarying column, as the data writes it (False, 0, "0")."""
+    inactive = values[~values.isin(ACTIVE_FLAG_VALUES)].dropna()
+    return inactive.mode().iloc[0] if len(inactive) else 0
 
 
 def extend_horizon(fine_table: pd.DataFrame, extract_future: pd.DataFrame, context: dict, configuration: Config) -> pd.DataFrame:
-    """The rows of the months after the extract up to extended_horizon_end, built month by month:
-    renewals falling due again after their term (proyectada) and last year's acquisition pipeline
-    (simulada); each month predicted before the next one is built (a projected row can re-enter)."""
-    if not configuration.extended_horizon_end:
-        return pd.DataFrame()
-    period_column = configuration.period_col
-    horizon_end = parse_month(configuration.extended_horizon_end)
-    last_extract_month = fine_table[period_column].max()
-    if horizon_end <= last_extract_month:
+    """The rows the simulation window creates, predicted like any future row.
+
+    INPUT:   the fine table (normal universe) · the extract's future rows, already predicted · the context.
+    OUTPUT:  the new rows (proyectada and simulada), predicted like any future row.
+    RULES:   window = current month … simulation_end; a row of the window falls due in month + 12.
+             proyectada: 1-year rows of the window, expected renewals, same dims, discount 0.
+             simulada: acquisitions of the window, per acquisition value and group, level × same
+             month a year before, value per unit of 12 months, timevarying off, acquisition_discount.
+             The group of an acquisition keeps the grain of the pipeline: every mandatory dim, every
+             extra_renovacion and every extra_revalorizacion (built from the Config: a new dim joins by
+             itself); the discount is one value (acquisition_discount), the timevarying dims are off.
+    EDGE CASES: an empty window → nothing. No acquisition_column → no simulada. A group with no
+             history for the level → its share of the projected total of its acquisition value.
+    """
+    period = configuration.period_col
+    window = configuration.simulation_window
+    if not window:
         return pd.DataFrame()
 
-    # the sources: every closed row with its REAL renewals, every future row with its EXPECTED renewals
-    closed = fine_table[fine_table[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES)].copy()
-    closed["_renovadas_fuente"] = closed[configuration.renewed_units_col].fillna(0)
-    closed["_renovado_usd_fuente"] = closed[configuration.renewed_usd_col].fillna(0)
-    future = extract_future.copy()
-    future["_renovadas_fuente"] = future["esperado_unidades"]
-    future["_renovado_usd_fuente"] = future["esperado_usd"]
-    sources = pd.concat([closed, future], ignore_index=True)
-    carried_columns = list(dict.fromkeys([period_column] + configuration.rate_series_columns + configuration.extra_revalorizacion
-                                         + ([configuration.discount_value_column] if configuration.discount_value_column else [])
-                                         + ([configuration.term_column] if configuration.term_column else [])
-                                         + [configuration.pipeline_units_col, configuration.pipeline_usd_col,
-                                            "_renovadas_fuente", "_renovado_usd_fuente"]))
-    sources = sources[[column for column in carried_columns if column in sources.columns]]
+    carried = list(dict.fromkeys(configuration.rate_series_columns + configuration.extra_revalorizacion
+                                 + ([configuration.term_column] if configuration.term_column else [])
+                                 + ([configuration.acquisition_column] if configuration.acquisition_column else [])))
+    carried = [column for column in carried if column in extract_future.columns]
 
-    built = []
-    for target_month in pd.period_range(last_extract_month + 1, horizon_end, freq="M"):
-        month_rows = []
-        # proyectada: renewals of m − T fall due again in m
-        terms = term_months_of(sources, configuration)
-        due_again = sources[(sources[period_column] + terms.to_numpy()) == target_month]
-        due_again = due_again[due_again["_renovadas_fuente"] > 0].copy()
-        if len(due_again):
-            due_again[configuration.pipeline_units_col] = due_again["_renovadas_fuente"]
-            due_again[configuration.pipeline_usd_col] = due_again["_renovado_usd_fuente"]
-            for column_name, value in configuration.reentry_overrides.items():
-                due_again[column_name] = value
-            if configuration.discount_value_column:
-                due_again[configuration.discount_value_column] = np.nan        # the discount of the new contract is unknown
-            due_again[PIPELINE_ORIGIN_COLUMN] = PIPELINE_PROJECTED
-            month_rows.append(due_again)
-        # simulada: the acquisition pipeline of m − 12 falls due in m
-        last_year = sources[(sources[period_column] == target_month - 12) & is_acquisition(sources, configuration)].copy()
-        if len(last_year):
-            last_year[PIPELINE_ORIGIN_COLUMN] = PIPELINE_SIMULATED
-            month_rows.append(last_year)
-        if not month_rows:
-            continue
-        new_rows = pd.concat(month_rows, ignore_index=True)
-        new_rows[period_column] = target_month
-        new_rows = with_ids(new_rows, configuration)
-        new_rows = predict_rows(new_rows, context, configuration)
-        built.append(new_rows)
-        # the rows of this month are sources for the months after it
-        next_sources = new_rows.assign(_renovadas_fuente=new_rows["esperado_unidades"], _renovado_usd_fuente=new_rows["esperado_usd"])
-        sources = pd.concat([sources, next_sources[[column for column in sources.columns if column in next_sources.columns]]],
-                            ignore_index=True)
-    if not built:
+    # proyectada: the expected renewals of the 1-year licences due in the window
+    renewing = extract_future[extract_future[period].isin(window) & is_one_year(extract_future, configuration)
+                              & (extract_future["esperado_unidades"] > 0)]
+    projected = renewing[carried].copy()
+    projected[period] = renewing[period].to_numpy() + 12
+    projected[configuration.pipeline_units_col] = renewing["esperado_unidades"].to_numpy()
+    projected[configuration.pipeline_usd_col] = renewing["esperado_usd"].to_numpy()
+    if configuration.discount_value_column:
+        projected[configuration.discount_value_column] = configuration.renewal_reentry_discount
+    projected[PIPELINE_ORIGIN_COLUMN] = PIPELINE_PROJECTED
+
+    # simulada: the acquisitions of the window
+    simulated = simulate_acquisitions(fine_table, window, carried, configuration)
+
+    new_rows = pd.concat([frame for frame in (projected, simulated) if len(frame)], ignore_index=True) \
+        if len(projected) or len(simulated) else pd.DataFrame()
+    if new_rows.empty:
+        return new_rows
+    new_rows = with_ids(new_rows, configuration)
+    new_rows = predict_rows(new_rows, context, configuration)
+    new_rows["_fila"] = np.nan
+    return new_rows
+
+
+def simulate_acquisitions(fine_table: pd.DataFrame, window: list, carried: list, configuration: Config) -> pd.DataFrame:
+    """The acquisitions of the window, one line per group of dims and acquisition value, due 12 months later.
+    An acquisition of month m is read as the pipeline it created: the 1-year acquisition rows due in m + 12."""
+    if not configuration.acquisition_column or not configuration.acquisition_values:
         return pd.DataFrame()
-    extension = pd.concat(built, ignore_index=True)
-    extension["_fila"] = np.nan
-    return extension.drop(columns=["_renovadas_fuente", "_renovado_usd_fuente"], errors="ignore")
+    period, current = configuration.period_col, configuration.calendar_boundaries()["current"]
+    timevarying = list(configuration.structural_timevarying_dims)
+    group_columns = [column for column in carried if column not in timevarying and column != configuration.term_column]
+    acquired = fine_table[is_acquisition(fine_table, configuration) & is_one_year(fine_table, configuration)].copy()
+    if acquired.empty:
+        return pd.DataFrame()
+    acquired["_mes_evento"] = acquired[period] - 12
+    acquired["_grupo"] = join_columns(acquired, group_columns)
+    events = (acquired[acquired["_mes_evento"] < current]
+              .groupby(["_grupo", configuration.acquisition_column, "_mes_evento"])
+              [[configuration.pipeline_units_col, configuration.pipeline_usd_col]].sum().reset_index()
+              .rename(columns={configuration.pipeline_units_col: "unidades", configuration.pipeline_usd_col: "valor"}))
+    dims_of_group = acquired.drop_duplicates("_grupo").set_index("_grupo")[group_columns]
+    level_months = list(pd.period_range(current - configuration.acquisition_level_window_months, current - 1, freq="M"))
+    auv_start = current - configuration.acquisition_auv_window_months
+
+    rows = []
+    for acquisition_value, block in events.groupby(configuration.acquisition_column):
+        by_group = block.set_index(["_grupo", "_mes_evento"])["unidades"]
+        recent = block[block["_mes_evento"].isin(level_months)].groupby("_grupo")["unidades"].sum()
+        before = block[block["_mes_evento"].isin([month - 12 for month in level_months])].groupby("_grupo")["unidades"].sum()
+        level = (recent / before.replace(0, np.nan)).dropna()
+        total_level = recent.sum() / before.sum() if before.sum() > 0 else np.nan
+        auv_window = block[block["_mes_evento"] >= auv_start]
+        auv = auv_window.groupby("_grupo")["valor"].sum() / auv_window.groupby("_grupo")["unidades"].sum().replace(0, np.nan)
+        total_auv = auv_window["valor"].sum() / auv_window["unidades"].sum() if auv_window["unidades"].sum() > 0 else np.nan
+        share = auv_window.groupby("_grupo")["unidades"].sum() / auv_window["unidades"].sum() if auv_window["unidades"].sum() > 0 else pd.Series(dtype=float)
+        total_by_month = block.groupby("_mes_evento")["unidades"].sum()
+        for month in window:
+            for group in share.index:
+                same_month = by_group.get((group, month - 12), np.nan)
+                group_level = level.get(group, np.nan)
+                by_share = not (np.isfinite(same_month) and np.isfinite(group_level))
+                units = (total_by_month.get(month - 12, np.nan) * total_level * share[group]) if by_share else same_month * group_level
+                if not np.isfinite(units) or units <= 0:
+                    continue
+                unit_value = auv.get(group, np.nan)
+                unit_value = unit_value if np.isfinite(unit_value) else total_auv
+                row = dims_of_group.loc[group].to_dict()
+                row.update({configuration.acquisition_column: acquisition_value, period: month + 12,
+                            configuration.pipeline_units_col: float(units),
+                            configuration.pipeline_usd_col: float(units * unit_value), "_por_cuota": int(by_share)})
+                rows.append(row)
+    simulated = pd.DataFrame(rows)
+    if simulated.empty:
+        return simulated
+    for column_name in timevarying:
+        simulated[column_name] = inactive_value(fine_table[column_name])
+    if configuration.term_column and configuration.term_column in fine_table.columns:
+        simulated[configuration.term_column] = configuration.one_year_term_value
+    if configuration.discount_value_column:
+        simulated[configuration.discount_value_column] = configuration.acquisition_discount
+    simulated[PIPELINE_ORIGIN_COLUMN] = PIPELINE_SIMULATED
+    return simulated.drop(columns="_por_cuota")
 
 
 def with_ids(rows: pd.DataFrame, configuration: Config) -> pd.DataFrame:
-    """The ids of an extended row (its dims may have changed with reentry_overrides)."""
+    """The ids of a simulated row: its series, its forecast unit, its discount bucket and its uplift cell."""
     rows = rows.copy()
     rows[SERIES_ID_COLUMN] = join_columns(rows, configuration.rate_series_columns)
     rows[UNIT_ID_COLUMN] = rows[SERIES_ID_COLUMN] + "|" + rows[configuration.period_col].astype(str)
@@ -450,8 +501,8 @@ def totals(future: pd.DataFrame, fine_table: pd.DataFrame, configuration: Config
     return by_month, by_year
 
 
-def check_forecast(future: pd.DataFrame, fine_table: pd.DataFrame, by_month: pd.DataFrame, configuration: Config,
-                   check_log: list) -> None:
+def check_forecast(future: pd.DataFrame, all_future: pd.DataFrame, fine_table: pd.DataFrame, by_month: pd.DataFrame,
+                   configuration: Config, check_log: list) -> None:
     """Checks 1 to 5."""
     missing = future[["tasa", "uplift", "esperado_usd"]].isna().any(axis=1)
     configuration.log_check(STEP_LABEL, check_log, "every future row has a rate, an uplift and an expected value",
@@ -462,15 +513,16 @@ def check_forecast(future: pd.DataFrame, fine_table: pd.DataFrame, by_month: pd.
     configuration.log_check(STEP_LABEL, check_log, "every rate and band is inside [0, 1] and the band contains the rate",
                             not bad_band.any(), failure_detail=f"{int(bad_band.sum()):,} rows with a bad rate or band",
                             examples=future.loc[bad_band, ["tasa", "tasa_baja", "tasa_alta"]])
-    future_roles = fine_table[CALENDAR_ROLE_COLUMN].isin([ROLE_PENDING, ROLE_PROJECTION])
+    future_roles = fine_table[CALENDAR_ROLE_COLUMN] == ROLE_PROJECTION
     configuration.log_check(STEP_LABEL, check_log, "no closed row is forecast; every future row of the extract is",
-                            set(future.loc[future[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL, "_fila"]) == set(fine_table.index[future_roles]),
+                            set(all_future.loc[all_future[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL, "_fila"])
+                            == set(fine_table.index[future_roles]),
                             failure_detail="the forecast rows are not the future rows")
-    real_rows = future[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL
-    due_difference = future.loc[real_rows, configuration.pipeline_usd_col].sum() - fine_table.loc[future_roles, configuration.pipeline_usd_col].sum()
+    real_rows = all_future[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL
+    due_difference = all_future.loc[real_rows, configuration.pipeline_usd_col].sum() - fine_table.loc[future_roles, configuration.pipeline_usd_col].sum()
     configuration.log_check(STEP_LABEL, check_log, "the pipeline of the extract's future rows is conserved (Σ USD due)",
                             abs(due_difference) <= MONEY_TOLERANCE, failure_detail=f"difference ${due_difference:,.2f}",
-                            context=f"${future.loc[real_rows, configuration.pipeline_usd_col].sum():,.0f} due in the extract")
+                            context=f"${all_future.loc[real_rows, configuration.pipeline_usd_col].sum():,.0f} due in the extract")
     total_difference = by_month["esperado_usd"].sum() - future["esperado_usd"].sum()
     configuration.log_check(STEP_LABEL, check_log, "the totals are the sum of the rows", abs(total_difference) <= MONEY_TOLERANCE,
                             failure_detail=f"difference ${total_difference:,.2f}", context=f"${future['esperado_usd'].sum():,.0f} expected")

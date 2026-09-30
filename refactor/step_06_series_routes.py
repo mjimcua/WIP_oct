@@ -1,13 +1,12 @@
 """
 step_06_series_routes.py — The series: which months each one has, and how it will be treated.
 
-A rate series is not forecast the same way depending on the months it has:
+A rate series is not forecast the same way: it depends on the months it has:
   · COVERAGE: the roles of its months, in time order (e.g. entrenamiento+examen+proyeccion)
   · ROUTE, from the coverage:
       predecible     closed months AND something to predict: its rate is estimated
       solo_historia  nothing to predict: kept, it lends its history to its relatives
       solo_futuro    nothing to learn from: predicted from its relatives
-    (a pending month alone is not history, it is not closed yet, but it is a month to predict)
   · UNIVERSE, from the time_series flag of its units: normal · serie_temporal · mixto
 Nothing is filtered: every series is labelled, none is dropped.
 
@@ -15,7 +14,7 @@ Actions (logged as they are done):
   1. group the forecast units by series
   2. count the months of each series in each role; first and last month
   3. coverage, route and universe of every series
-  4. the money each series has to predict (due from the pending months on)
+  4. the money each series has to predict (due from the current month on)
   5. check the series                                               checks 1-3
   6. write the series table                                         check 4
   7. count the checks; stop if any failed
@@ -34,8 +33,8 @@ coverage, route, universe, units and USD to predict) · table sff_series.
 # ─── imports ─────────────────────────────────────────────────────────────────────
 import pandas as pd
 
-from config import Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ROLE_PENDING, ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN,
+from config import ACTIVE_FLAG_VALUES, Config
+from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN,
                          ROLES_IN_ORDER, ROUTE_COLUMN, ROUTE_FUTURE_ONLY, ROUTE_HISTORY_ONLY, ROUTE_PREDICTABLE,
                          SERIES_ID_COLUMN, SERIES_KEY_COLUMN, TABLE_SERIES, UNIT_ID_COLUMN, UNIVERSE_COLUMN,
                          UNIVERSE_MIXED, UNIVERSE_NORMAL, UNIVERSE_TIME_SERIES)
@@ -49,7 +48,7 @@ STEP_PURPOSE = ("describe every rate series by the months it has (coverage) and 
 STEP_ACTIONS = ["group the forecast units by series",
                 "count the months of each series in each role; first and last month",
                 "coverage, route and universe of every series",
-                "the money each series has to predict (due from the pending months on)",
+                "the money each series has to predict (due from the current month on)",
                 "check the series (checks 1-3)",
                 "write the series table (check 4)",
                 "count the checks; stop if any failed",
@@ -59,8 +58,7 @@ STEP_OUTPUT = "one row per series with its coverage, route and universe · table
 # ─── named constants ─────────────────────────────────────────────────────────────
 COVERAGE_SEPARATOR = "+"
 ROUTES_IN_ORDER = [ROUTE_PREDICTABLE, ROUTE_HISTORY_ONLY, ROUTE_FUTURE_ONLY]
-MONTH_COUNT_COLUMN = {ROLE_TRAIN: "meses_entrenamiento", ROLE_TEST: "meses_examen",
-                      ROLE_PENDING: "meses_pendiente_cierre", ROLE_PROJECTION: "meses_proyeccion"}
+MONTH_COUNT_COLUMN = {ROLE_TRAIN: "meses_entrenamiento", ROLE_TEST: "meses_examen", ROLE_PROJECTION: "meses_proyeccion"}
 EXAMPLE_ROWS_SHOWN = 3
 
 
@@ -68,7 +66,7 @@ def route_from_coverage(roles_present: set) -> str:
     """The route of a series from the roles it has: nothing to predict → solo_historia;
     something to predict and a closed month (training or exam) → predecible; something
     to predict and no closed month → solo_futuro."""
-    has_something_to_predict = ROLE_PROJECTION in roles_present or ROLE_PENDING in roles_present
+    has_something_to_predict = ROLE_PROJECTION in roles_present
     has_closed_months = ROLE_TRAIN in roles_present or ROLE_TEST in roles_present
     if not has_something_to_predict:
         return ROUTE_HISTORY_ONLY
@@ -107,15 +105,15 @@ def build_series_routes(forecast_units: pd.DataFrame, configuration: Config) -> 
     series_table[COVERAGE_COLUMN] = roles_of_series.map(
         lambda roles: COVERAGE_SEPARATOR.join(role for role in ROLES_IN_ORDER if role in roles))
     series_table[ROUTE_COLUMN] = roles_of_series.map(route_from_coverage)
-    flagged_share = grouped_by_series[flag_column].apply(lambda flags: flags.isin([1, True, "1"]).mean())
+    flagged_share = grouped_by_series[flag_column].apply(lambda flags: flags.isin(ACTIVE_FLAG_VALUES).mean())
     series_table[UNIVERSE_COLUMN] = flagged_share.map(
         lambda share: UNIVERSE_TIME_SERIES if share == 1 else (UNIVERSE_NORMAL if share == 0 else UNIVERSE_MIXED))
     route_census = series_table[ROUTE_COLUMN].value_counts().to_dict()
     configuration.log_action(STEP_LABEL, 3, f"routes: {route_census} · universes: "
                                             f"{series_table[UNIVERSE_COLUMN].value_counts().to_dict()}")
 
-    # [4] what each series has to predict: what falls due from the pending months on
-    to_predict = forecast_units[CALENDAR_ROLE_COLUMN].isin([ROLE_PENDING, ROLE_PROJECTION])
+    # [4] what each series has to predict: what falls due from the current month on
+    to_predict = forecast_units[CALENDAR_ROLE_COLUMN] == ROLE_PROJECTION
     predicted_units = forecast_units[to_predict].groupby(SERIES_ID_COLUMN)
     series_table["unidades_por_predecir"] = predicted_units[configuration.pipeline_units_col].sum()
     series_table["usd_por_predecir"] = predicted_units[configuration.pipeline_usd_col].sum()
