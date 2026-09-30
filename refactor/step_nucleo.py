@@ -95,7 +95,9 @@ CALENDAR_MEASURES = [("s02_renovadas_unidades", "02", "renewed units after the c
                      ("s02_renovado_usd", "02", "renewed USD after the calendar: null → 0 in closed months, wiped from the current month on")]
 
 # steps 15-17, per FUTURE ROW (a value of the row: the money columns add up)
-ROW_VALUES_STEP_17 = [("h", "s17_h", "17", "months from the last closed month"),
+ROW_VALUES_STEP_17 = [("_vencen_unidades", "s17_vencen_unidades", "17", "units due of the future row: the extract's or the extended horizon's (SUM)"),
+                      ("_vencen_usd", "s17_vencen_usd", "17", "USD due of the future row: the extract's or the extended horizon's (SUM)"),
+                      ("h", "s17_h", "17", "months from the last closed month"),
                       ("origen_tasa", "s17_origen_tasa", "17", "pool (technique of its estimation id) · celda_mandatory · global"),
                       ("tecnica", "s17_tecnica", "17", "the technique that predicted the rate of this row"),
                       ("tasa", "s17_tasa", "17", "the predicted rate of the row (units)"),
@@ -168,6 +170,9 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
     # [2] the gap rows
     gap_rows = rows_of_the_gaps(rated_units, raw_rows.columns, configuration) if rated_units is not None else raw_rows.iloc[0:0]
     core = pd.concat([raw_rows, gap_rows], ignore_index=True) if len(gap_rows) else raw_rows
+    extension_rows = rows_of_the_extension(forecast, core.columns, configuration) if forecast is not None else core.iloc[0:0]
+    if len(extension_rows):
+        core = pd.concat([core, extension_rows], ignore_index=True)
     configuration.log_action(STEP_LABEL, 2, f"{len(gap_rows):,} gap rows" if rated_units is not None
                              else "no gap rows: step 08 has not run")
 
@@ -194,11 +199,13 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
         core, backtest_specs = add_backtest_block(core, technique_decision, exam_by_pool, configuration)
         blocks_present.append(backtest_specs)
     if forecast is not None:
-        forecast_values = forecast[["_fila"] + [source for source, _, _, _ in ROW_VALUES_STEP_17]]
+        forecast_values = forecast.assign(_clave=forecast_keys(forecast), _vencen_unidades=forecast[configuration.pipeline_units_col],
+                                          _vencen_usd=forecast[configuration.pipeline_usd_col])
+        forecast_values = forecast_values[["_clave"] + [source for source, _, _, _ in ROW_VALUES_STEP_17]]
         forecast_values = forecast_values.rename(columns={source: name for source, name, _, _ in ROW_VALUES_STEP_17})
-        core = core.merge(forecast_values, on="_fila", how="left")
+        core = core.merge(forecast_values, on="_clave", how="left")
         blocks_present.append(ROW_VALUES_STEP_17)
-    core = core.drop(columns="_fila")
+    core = core.drop(columns=["_fila", "_clave"], errors="ignore")
     if "s04_filas_finas" in core.columns:
         core.loc[core[ROW_ORIGIN_COLUMN] == ROW_FROM_GAP, "s04_filas_finas"] = 0     # a gap adds no fine row
     core = core.sort_values(["s03_fs_id", configuration.period_col, ROW_ORIGIN_COLUMN]).reset_index(drop=True)
@@ -281,7 +288,37 @@ def rows_of_the_extract(fine_table: pd.DataFrame, dimension_columns: list, confi
     raw_rows["s03_fu_id"] = fine_table[UNIT_ID_COLUMN]
     raw_rows["s03_uplift_cell_id"] = fine_table[UPLIFT_CELL_ID_COLUMN]
     raw_rows["_fila"] = fine_table.index      # the position of the fine row: the forecast joins on it, then it is dropped
+    raw_rows["_clave"] = [f"f{position}" for position in fine_table.index]
     return raw_rows.reset_index(drop=True)
+
+
+def forecast_keys(forecast: pd.DataFrame) -> list:
+    """The join key of every forecast row: 'f<position>' for a row of the extract, 'e<n>' for an extended row."""
+    return [f"f{int(position)}" if pd.notna(position) else f"e{number}"
+            for number, position in enumerate(forecast["_fila"])]
+
+
+def rows_of_the_extension(forecast: pd.DataFrame, core_columns, configuration: Config) -> pd.DataFrame:
+    """One row per row of the extended horizon (proyectada, simulada): its month, dims and ids;
+    the measures of the extract at 0 (it is not in the extract: its pipeline is in s17_vencen_*)."""
+    keys = forecast_keys(forecast)
+    extension = forecast[forecast["_fila"].isna()]
+    if extension.empty:
+        return pd.DataFrame(columns=core_columns)
+    rows = pd.DataFrame({ROW_ORIGIN_COLUMN: extension["origen_pipeline"].to_numpy(),
+                         configuration.period_col: extension[configuration.period_col].to_numpy()})
+    for column_name in core_columns:
+        if column_name in extension.columns and column_name not in rows.columns and not column_name.startswith("s"):
+            rows[column_name] = extension[column_name].to_numpy()
+    for measure_name, _, _ in RAW_MEASURES:
+        rows[measure_name] = 0.0
+    rows["s02_rol"] = extension[CALENDAR_ROLE_COLUMN].to_numpy()
+    rows["s02_es_mes_en_curso"] = 0
+    rows["s03_fs_id"] = extension[SERIES_ID_COLUMN].to_numpy()
+    rows["s03_fu_id"] = extension[UNIT_ID_COLUMN].to_numpy()
+    rows["s03_uplift_cell_id"] = extension[UPLIFT_CELL_ID_COLUMN].to_numpy()
+    rows["_clave"] = [key for key, position in zip(keys, forecast["_fila"]) if pd.isna(position)]
+    return rows.reindex(columns=list(core_columns))
 
 
 def rows_of_the_gaps(rated_units: pd.DataFrame, core_columns, configuration: Config) -> pd.DataFrame:
@@ -304,7 +341,9 @@ def rows_of_the_gaps(rated_units: pd.DataFrame, core_columns, configuration: Con
 
 def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: list, configuration: Config) -> pd.DataFrame:
     """Every column of the core with its step, its level and how to aggregate it."""
-    legend_rows = [(ROW_ORIGIN_COLUMN, "NU", LEVEL_ROW, AGGREGATE_SLICER, "raw = a row of the extract · hueco = a month with nothing due inside a history"),
+    legend_rows = [(ROW_ORIGIN_COLUMN, "NU", LEVEL_ROW, AGGREGATE_SLICER, "raw = a row of the extract · hueco = a month with nothing "
+                    "due inside a history · proyectada / simulada = a row of the extended horizon (renewal falling due again / "
+                    "last year's acquisition)"),
                    (configuration.period_col, "00", LEVEL_ROW, AGGREGATE_SLICER, "the month")]
     for column_name in dimension_columns:
         description = ("the exact discount (share)" if column_name == configuration.discount_value_column
@@ -323,7 +362,8 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
                     ("s03_uplift_cell_id", "03", LEVEL_ROW, AGGREGATE_SLICER, "the price context (uplift cell)")]
     unit_names = {name for _, name, _, _ in UNIT_VALUES_STEP_04 + UNIT_VALUES_STEP_07}
     row_names = {name for _, name, _, _ in ROW_VALUES_STEP_17}
-    summable = {"s17_esperado_unidades", "s17_esperado_usd", "s17_esperado_usd_bajo", "s17_esperado_usd_alto"}
+    summable = {"s17_esperado_unidades", "s17_esperado_usd", "s17_esperado_usd_bajo", "s17_esperado_usd_alto",
+                "s17_vencen_unidades", "s17_vencen_usd"}
     for block_specs in blocks_present:
         for _, name, step, description in block_specs:
             if name in row_names:
@@ -341,10 +381,12 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
                blocks_present: list, configuration: Config, check_log: list) -> None:
     """Checks 1 to 4."""
     # [1] rows: the extract plus the gaps
-    configuration.log_check(STEP_LABEL, check_log, "one row per fine row of the extract plus one per gap",
-                            len(core) == len(fine_table) + len(gap_rows),
-                            failure_detail=f"{len(core):,} rows for {len(fine_table):,} fine rows and {len(gap_rows):,} gaps",
-                            context=f"{len(fine_table):,} raw + {len(gap_rows):,} gaps")
+    extension_count = int((~core[ROW_ORIGIN_COLUMN].isin([ROW_FROM_RAW, ROW_FROM_GAP])).sum())
+    configuration.log_check(STEP_LABEL, check_log, "one row per fine row of the extract, per gap and per row of the extended horizon",
+                            len(core) == len(fine_table) + len(gap_rows) + extension_count
+                            and int((core[ROW_ORIGIN_COLUMN] == ROW_FROM_RAW).sum()) == len(fine_table),
+                            failure_detail=f"{len(core):,} rows for {len(fine_table):,} fine rows, {len(gap_rows):,} gaps, {extension_count:,} extended",
+                            context=f"{len(fine_table):,} raw + {len(gap_rows):,} gaps + {extension_count:,} extended horizon")
 
     # [2] the money reconciles with the extract
     reconciliation = {"s00_vencen_unidades": fine_table[configuration.pipeline_units_col].sum(),
@@ -365,7 +407,8 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
     series_columns = [name for name in first_columns if name not in unit_names]
     unit_columns = [name for name in first_columns if name in unit_names]
     raw_rows = core[ROW_ORIGIN_COLUMN] == ROW_FROM_RAW
-    without_values = (int(core[series_columns].isna().any(axis=1).sum()) if series_columns else 0) + \
+    history_rows = core[ROW_ORIGIN_COLUMN].isin([ROW_FROM_RAW, ROW_FROM_GAP])       # an extended row may be a new series
+    without_values = (int(core.loc[history_rows, series_columns].isna().any(axis=1).sum()) if series_columns else 0) + \
                      (int(core.loc[raw_rows, unit_columns].isna().any(axis=1).sum()) if unit_columns else 0)
     configuration.log_check(STEP_LABEL, check_log, "every row has the values of every block present", without_values == 0,
                             failure_detail=f"{without_values:,} rows without some block's values",

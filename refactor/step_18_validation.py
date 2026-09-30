@@ -9,8 +9,9 @@ has run, and leaves the result in one table:
   · every future row takes its rate from its series' estimation id when it has one
   · the forecast is coherent with the past: the expected rate of the future (USD) is within
     ±15 pp of the last closed year's (warning: a larger jump must be explained)
-  · the precision measured in the exam: the error of the total renewals is within ±10 %
-    (warning: the forecast is less reliable than promised)
+  · the precision measured in the exam of the portfolio (step 19, series by series): the
+    error of the total renewals is within ±10 % in every exam month (warning: the forecast is
+    less reliable than promised)
 
 Actions (logged as they are done):
   1. the money along the chain
@@ -71,9 +72,10 @@ def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> p
                             max(totals.values()) - min(totals.values()) <= MONEY_TOLERANCE,
                             failure_detail=f"totals differ: {totals}", context=f"${totals['extracto']:,.0f}")
     future_due = fine.loc[fine[CALENDAR_ROLE_COLUMN].isin([ROLE_PENDING, ROLE_PROJECTION]), due].sum()
-    configuration.log_check(STEP_LABEL, check_log, "the future USD due of the extract = Σ USD due of the forecast",
-                            abs(future_due - forecast[due].sum()) <= MONEY_TOLERANCE,
-                            failure_detail=f"${future_due:,.0f} vs ${forecast[due].sum():,.0f}", context=f"${future_due:,.0f}")
+    configuration.log_check(STEP_LABEL, check_log, "the future USD due of the extract = Σ USD due of the forecast's extract rows",
+                            abs(future_due - forecast.loc[forecast["origen_pipeline"] == "real", due].sum()) <= MONEY_TOLERANCE,
+                            failure_detail=f"${future_due:,.0f} vs ${forecast.loc[forecast['origen_pipeline'] == 'real', due].sum():,.0f}",
+                            context=f"${future_due:,.0f} (the extended horizon adds its own pipeline)")
 
     # [2] coverage
     configuration.log_action(STEP_LABEL, 2, "the coverage of the series and the forecast rows")
@@ -97,12 +99,15 @@ def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> p
     last_year = closed[configuration.period_col].max().year
     last_year_rows = closed[closed[configuration.period_col].map(lambda month: month.year) == last_year]
     past_rate = last_year_rows[configuration.renewed_usd_col].sum() / last_year_rows[due].sum()
-    future_rate = forecast["esperado_usd"].sum() / forecast[due].sum()
+    extract_rows = forecast[forecast["origen_pipeline"] == "real"]
+    future_rate = extract_rows["esperado_usd"].sum() / extract_rows[due].sum()
     configuration.log_check(STEP_LABEL, check_log, f"the expected rate of the future is within ±{MAX_RATE_JUMP_PP:.0f} pp of {last_year}'s",
                             abs(future_rate - past_rate) * 100 <= MAX_RATE_JUMP_PP,
                             failure_detail=f"future {future_rate:.1%} vs {last_year} {past_rate:.1%}: explain the jump",
                             context=f"future {future_rate:.1%} (USD, uplift included) vs {last_year} {past_rate:.1%}", blocking=False)
-    exam_error = results["backtest"]["exam_total"]["elegida_error_pct"].abs().max()
+    exam = results.get("portfolio_exam")
+    exam_error = (exam["framework_error_total"].abs().max() if exam is not None
+                  else results["backtest"]["exam_total"]["elegida_error_pct"].abs().max())
     configuration.log_check(STEP_LABEL, check_log, f"the error of the total renewals in the exam is within ±{MAX_EXAM_TOTAL_ERROR:.0%}",
                             exam_error <= MAX_EXAM_TOTAL_ERROR,
                             failure_detail=f"the worst month misses by {exam_error:.1%}", context=f"worst month {exam_error:.1%}",

@@ -149,3 +149,14 @@ TABLE_FORECAST = "forecast"                  # step 17: every future fine row wi
 TABLE_FORECAST_MONTH = "forecast_mes"        # step 17: the total by month with its bands
 TABLE_BUSINESS_SUMMARY = "resumen_negocio"   # step 17: the answers by year
 TABLE_VALIDATION = "validacion"              # step 18: the final checks across steps
+
+# ─── step 19: the exam of the portfolio (framework vs the spreadsheet) ───────────
+TABLE_PORTFOLIO_EXAM = "examen_cartera"               # per exam month and horizon: real vs framework vs spreadsheet
+TABLE_PORTFOLIO_EXAM_SUMMARY = "examen_cartera_resumen"   # per method and horizon: the mean error of the total and by series
+METHOD_FRAMEWORK = "framework"
+
+# ─── the extended horizon (step 17) ──────────────────────────────────────────────
+PIPELINE_ORIGIN_COLUMN = "origen_pipeline"   # where the pipeline of a future row comes from
+PIPELINE_REAL = "real"                       # in the extract (known)
+PIPELINE_PROJECTED = "proyectada"            # a renewal (real or expected) that falls due again after its term
+PIPELINE_SIMULATED = "simulada"              # acquisition pipeline copied from the same month a year before

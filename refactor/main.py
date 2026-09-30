@@ -36,6 +36,7 @@ from step_15_uplift import estimate_uplift
 from step_16_uplift_backtest import backtest_uplift
 from step_17_forecast import assemble_forecast
 from step_18_validation import validate_chain
+from step_19_portfolio_exam import examine_portfolio
 from step_nucleo import build_core_table
 from step_informe import build_report
 
@@ -99,6 +100,12 @@ def kamelot_configuration() -> Config:
         # the other columns of the extract
         extra_measure_cols=["total_reacquired_units", "total_reacquired_usd", "TR_AUV", "REN_AUV", "ReAC_AUV"],
         ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
+        # the extended horizon: the whole of 2027 (the extract carries the pipeline up to 2027-08)
+        extended_horizon_end="2027-12",
+        term_column="tr_term_level_2",
+        term_months_by_value={"1 year": 12, "2 year": 24, "3 year": 36},               # [por confirmar] the values
+        reentry_overrides={"tr_purchase_type": "Renewal"},                              # [por confirmar] the value
+        acquisition_row_filter={"tr_purchase_type": ["Acquisition"]},                   # [por confirmar] the values
     )
 
 
@@ -120,6 +127,10 @@ def synthetic_configuration() -> Config:
         # discount: the framework derives the bucket, so the synthetic's is ignored
         discount_value_column="discount_pct",
         ignore_cols=["dataset_role", "is_current_month", "discount"],
+        # the extended horizon: the whole of 2027; a new customer who renews is no longer new
+        extended_horizon_end="2027-12",
+        reentry_overrides={"newcust": 0},
+        acquisition_row_filter={"newcust": [1]},
     )
 
 
@@ -170,7 +181,9 @@ def run(configuration: Config) -> dict:
                    series=series_table, support_bound=support_bound, rated_units=rated_units, series_rate=series_rate)
     results.update(uplift_cells=uplift_cells, contract_check=contract_check, uplift_backtest=uplift_backtest,
                    uplift_verdict=uplift_verdict, forecast=forecast)
-    results["validation"] = validate_chain(raw, results, configuration)                            # step 18
+    results["portfolio_exam"], results["portfolio_exam_summary"] = examine_portfolio(
+        rated_units, series_estimate, pool_series, backtest, configuration)                          # step 19
+    results["validation"] = validate_chain(raw, results, configuration)                            # step 18 (after 19: it reads its exam)
     results["card"] = build_report(raw, results, configuration)                                   # the report, last
     return results
 

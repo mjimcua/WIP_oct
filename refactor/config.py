@@ -227,8 +227,20 @@ class Config:
     random_seed: int = 42                 # the bootstrap is reproducible
     contract_apply_realization_ratio: bool = False   # contract path: 1/(1−d) as is (False) or × the cell's observed ratio
     # ─── the forecast (step 17) ───
+    extended_horizon_end: Optional[str] = None    # forecast beyond the extract up to this month ("2027-12"); None = the extract only
+    term_column: Optional[str] = None             # the column with the contract term; None = every contract lasts default_term_months
+    term_months_by_value: dict = field(default_factory=lambda: {"1 year": 12, "2 year": 24, "3 year": 36})
+    default_term_months: int = 12                 # the term of a value not in the mapping (or with no term column)
+    reentry_overrides: dict = field(default_factory=dict)       # dims a renewal takes when it falls due again
+                                                                # (e.g. purchase type → renewal); {} = it keeps its dims
+    acquisition_row_filter: dict = field(default_factory=dict)  # the rows that are acquisition pipeline ({column: [values]});
+                                                                # {} = no acquisition is simulated
     apply_credibility_shift: bool = True  # a series that borrows keeps z × its own difference of level with the pool
                                           # (logit scale); False = it takes the pool's prediction as is
+    # ─── the spreadsheet baseline (step 19): what the business does today ───
+    baseline_months: int = 12             # the rate of the last N closed months… (what the business does: 12 months per cell)
+    baseline_grains: list = field(default_factory=lambda: ["mandatory", "global"])   # …per grain: "global", "mandatory"
+                                          # (every mandatory dim) or columns joined with "+" (e.g. "region+product")
     # ─── the backtest of the rate (step 14) ───
     challenger_technique: str = "T3_ma3"  # the technique to beat: the moving average of 3 months (what a spreadsheet does)
     backtest_selection_months: int = 6    # closed months BEFORE the exam used as targets to CHOOSE the technique

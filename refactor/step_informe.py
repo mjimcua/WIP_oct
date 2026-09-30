@@ -330,8 +330,13 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     if len(by_level):
         by_level["series"] = by_level["series"].astype(int)
 
-    total_error = exam_total["elegida_error_pct"].abs().mean()
-    headline.append(("error medio del TOTAL de renovaciones en el examen", f"{total_error:.1%}"))
+    portfolio_summary = results.get("portfolio_exam_summary")
+    if portfolio_summary is not None:
+        for horizon, block in portfolio_summary.groupby("h"):
+            framework = block[block["metodo"] == "framework"].iloc[0]
+            spreadsheet = block[block["metodo"] != "framework"].sort_values("error_total_medio").iloc[0]
+            headline.append((f"error del TOTAL en el examen, h = {horizon}: framework vs mejor hoja de cálculo",
+                             f"{framework['error_total_medio']:.1%} vs {spreadsheet['error_total_medio']:.1%} ({spreadsheet['metodo']})"))
     if len(by_band):
         first = by_band.iloc[0]
         headline.append((f"error medio de la tasa por pool en el examen ({first['tramo']})",
@@ -354,9 +359,12 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
              "**Precisión en el examen por tramo** (error medio de la tasa en pp, ponderado por dinero; dentro_banda: "
              "proporción de errores dentro de la banda del 90 %):", "", markdown_table(by_band),
              "**Precisión en el examen por nivel de riesgo** (tramo corto):", "", markdown_table(by_level),
-             "**Precisión del TOTAL** (Σ renovaciones predichas frente a reales, pools juzgados):", "",
-             markdown_table(exam_total[["mes_objetivo", "h", "renovadas_reales", "elegida_renovadas_pred", "elegida_error_pct",
-                                        "retador_error_pct"]], 3)]
+             "**La cartera en el examen, serie a serie: el framework frente a la hoja de cálculo** (paso 19; cada serie "
+             "predicha como la predice el forecast, con solo lo que se sabía h meses antes; la hoja: la tasa de los últimos "
+             f"{configuration.baseline_months} meses por grano × la pipeline real; error_total: de la suma de la cartera; "
+             "wape_series: serie a serie, sin compensaciones):", "",
+             markdown_table(results["portfolio_exam_summary"], 3) if results.get("portfolio_exam_summary") is not None else "",
+             markdown_table(results["portfolio_exam"], 3) if results.get("portfolio_exam") is not None else ""]
     return "\n".join(lines) + "\n"
 
 
@@ -400,6 +408,10 @@ def chapter_forecast(results: dict, configuration: Config, headline: list) -> st
              + (" (activado)" if configuration.apply_credibility_shift else " (desactivado)") + ". Sin id de estimación: la "
              "tasa de su celda mandatory. Las bandas: **lineal** (todos los errores en el mismo sentido, el peor caso) y "
              "**cuadratura** (errores independientes); la verdad está entre ambas.", "",
+             "**Horizonte extendido** (más allá del extracto, hasta "
+             f"{configuration.extended_horizon_end or '—'}): las renovaciones de m − T vuelven a vencer en m, T la duración del "
+             "contrato (reales si m − T está cerrado, esperadas si no; **proyectada**), y la pipeline de captación del mismo mes "
+             "del año anterior se copia (**simulada**). Cada mes se construye y se predice antes del siguiente.", "",
              "**Por mes:**", "", markdown_table(by_month, 0),
              "**Por año** (lo renovado en los meses cerrados + lo esperado en los futuros):", "", markdown_table(by_year, 0),
              "**De dónde sale la tasa de las filas futuras:**", "", markdown_table(origins, 0)]
