@@ -81,9 +81,7 @@ TABLE_DIMENSION_PAIRS = "decision_eta2_pares"   # step 09: the pairs of dimensio
 # ─── the ladder (steps 10 and 11) ────────────────────────────────────────────────
 SIGN_TOKEN = "SIG="                          # inside a relative's pattern: the timevarying block summarised as its sign
 WILDCARD = "*"                               # inside a relative's pattern: a dimension collapsed or annulled
-RUNG_COLUMN = "peldano"                      # 0 = the series itself; the higher, the farther the relative
-PATTERN_COLUMN = "patron"                    # the id of a relative: the pool of every series that matches it
-ESTIMATION_ID_COLUMN = "id_estimacion"       # the pattern of the relative a series takes its rate from
+ESTIMATION_ID_COLUMN = "final_group_id"      # the final group of a series in the ladder (step 10): it lends its rate
 
 # The risk level of a series: how its rate is estimated, from best to worst.
 LEVEL_OWN = "A_propio"                        # its own support is precise (≥ own_rate_floor) and it has a full year
@@ -98,8 +96,9 @@ LEVEL_NO_IMPACT = "N_sin_impacto"             # nothing to predict (solo_histori
 LEVEL_TIME_SERIES = "T_universo_ts"           # the time_series universe: treated apart
 
 # ─── the tables of steps 10 and 11 ───────────────────────────────────────────────
-TABLE_RELATIVES = "parientes"                 # step 10: every series × rung: its relative's pattern
-TABLE_POOLS = "pools"                         # step 10: every pattern: its support and its rate
+TABLE_LADDER_STEPS = "ladder_steps"           # step 10: every series × pass: its group id and the group's support
+TABLE_LADDER_SUMMARY = "ladder_summary"       # step 10: every pass: groups, support, money in groups that reach the floor
+TABLE_LADDER_GROUPS = "ladder_groups"         # step 10: every series: its final group and its credibility reference
 TABLE_SERIES_ESTIMATE = "series_estimacion"   # step 11: every series: its chosen relative, rate, errors, level
 TABLE_RISK_LEVELS = "niveles_riesgo"          # step 11: money by risk level
 
