@@ -55,7 +55,7 @@ import pandas as pd
 from config import Config, join_columns
 from vocabulario import (TRUTH_ROLES as TRUTH_ROLES_OF_CORE, S0_PIPELINE_UNITS_COLUMN, S0_PIPELINE_USD_COLUMN, CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN, ESTIMATION_ID_COLUMN,
                          FINE_ROWS_COLUMN, ROLE_TEST, ROLE_TRAIN, ROUTE_COLUMN, ROW_FROM_GAP, ROW_FROM_RAW,
-                         ROW_ORIGIN_COLUMN, RUNG_COLUMN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
+                         ROW_ORIGIN_COLUMN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
                          SERIES_ID_COLUMN, SIGN_COLUMN, SYNTHETIC_COLUMN, TABLE_CORE, TABLE_CORE_LEGEND,
                          UNIT_ID_COLUMN, UNIVERSE_COLUMN, UPLIFT_CELL_ID_COLUMN)
 
@@ -126,14 +126,18 @@ SERIES_VALUES_STEP_08 = [("n_propio", "s08_n_propio", "08", "units due in a typi
                          ("error_binomial_pp", "s08_error_binomial_pp", "08", "Wilson half-width of one month at n_propio (pp)"),
                          (SIGN_COLUMN, "s08_signo", "08", "neutro · negativo · positivo · mixto"),
                          ("bajo_suelo", "s08_bajo_suelo", "08", "1 when n_propio is below support_floor")]
-SERIES_VALUES_STEP_11 = [(ESTIMATION_ID_COLUMN, "s11_id_estimacion", "11", "the pattern of the relative the series takes its rate from ('*' = collapsed)"),
-                         (RUNG_COLUMN, "s11_peldano", "11", "0 = itself; the higher, the farther the relative"),
-                         ("n_efectivo", "s11_n_efectivo", "11", "support of the chosen relative"),
-                         ("tasa_pariente", "s11_tasa_pariente", "11", "rate of the chosen relative"),
-                         ("alcanzo_suelo", "s11_alcanzo_suelo", "11", "1 when the chosen relative reaches the support floor"),
-                         ("k", "s11_k", "11", "Bühlmann k of the relative"),
-                         ("z", "s11_z", "11", "credibility of the own rate: n / (n + k)"),
-                         ("tasa_estimada", "s11_tasa_estimada", "11", "estimated rate of the series: z·own + (1 − z)·relative"),
+SERIES_VALUES_STEP_11 = [(ESTIMATION_ID_COLUMN, "s11_final_group_id", "11", "the final group of the series in the ladder: it lends its rate ('*' = collapsed)"),
+                         ("final_step", "s11_final_step", "11", "the pass of the ladder where its group was formed (0 = itself)"),
+                         ("group_series", "s11_group_series", "11", "series in its final group"),
+                         ("group_support", "s11_group_support", "11", "support of its final group (units due in a typical month)"),
+                         ("group_rate", "s11_group_rate", "11", "rate of its final group"),
+                         ("credibility_ref_id", "s11_credibility_ref_id", "11", "the wider group its rate is blended with (below own_rate_floor)"),
+                         ("ref_support", "s11_ref_support", "11", "support of the credibility reference"),
+                         ("ref_rate", "s11_ref_rate", "11", "rate of the credibility reference"),
+                         ("alcanzo_suelo", "s11_alcanzo_suelo", "11", "1 when its final group reaches the support floor"),
+                         ("k", "s11_k", "11", "Bühlmann k of the reference"),
+                         ("z", "s11_z", "11", "credibility of the group's own rate: n / (n + k); 1 without a reference"),
+                         ("tasa_estimada", "s11_tasa_estimada", "11", "estimated rate: z·group + (1 − z)·reference (the same for every series of a group)"),
                          ("se_estimacion_pp", "s11_se_estimacion_pp", "11", "error of the estimate (pp)"),
                          ("se_prediccion_pp", "s11_se_prediccion_pp", "11", "error of next month's prediction (pp): never below the series' own noise"),
                          ("nivel_riesgo", "s11_nivel_riesgo", "11", "how the rate was obtained: A_propio … N_sin_impacto")]
@@ -208,12 +212,12 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
         if block_frame is not None:
             core = add_block(core, block_frame, SERIES_ID_COLUMN, "s03_fs_id", block_specs)
             blocks_present.append(block_specs)
-    if pool_dynamics is not None and len(pool_dynamics) and "s11_id_estimacion" in core.columns:
-        dynamics_values = pool_dynamics[["id_estimacion"] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
+    if pool_dynamics is not None and len(pool_dynamics) and "s11_final_group_id" in core.columns:
+        dynamics_values = pool_dynamics[["final_group_id"] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
         dynamics_values = dynamics_values.rename(columns={source: name for source, name, _, _ in ESTIMATION_VALUES_STEP_13})
-        core = core.merge(dynamics_values, left_on="s11_id_estimacion", right_on="id_estimacion", how="left").drop(columns="id_estimacion")
+        core = core.merge(dynamics_values, left_on="s11_final_group_id", right_on="final_group_id", how="left").drop(columns="final_group_id")
         blocks_present.append(ESTIMATION_VALUES_STEP_13)
-    if technique_decision is not None and "s11_id_estimacion" in core.columns:
+    if technique_decision is not None and "s11_final_group_id" in core.columns:
         core, backtest_specs = add_backtest_block(core, technique_decision, exam_by_pool, configuration)
         blocks_present.append(backtest_specs)
     if forecast is not None:
@@ -266,11 +270,11 @@ def add_block(core: pd.DataFrame, block_frame: pd.DataFrame, key_column: str, co
 def add_backtest_block(core: pd.DataFrame, technique_decision: pd.DataFrame, exam_by_pool: pd.DataFrame,
                        configuration: Config) -> tuple:
     """The chosen technique and the exam error of the row's estimation id, one column per horizon band."""
-    per_band = technique_decision[["id_estimacion", "tramo_h", "tecnica", "tecnica_origen"]]
+    per_band = technique_decision[["final_group_id", "tramo_h", "tecnica", "tecnica_origen"]]
     if exam_by_pool is not None:
-        per_band = per_band.merge(exam_by_pool[["id_estimacion", "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio",
-                                                "dentro_banda"]], on=["id_estimacion", "tramo_h"], how="left")
-    wide = per_band.pivot(index="id_estimacion", columns="tramo_h")
+        per_band = per_band.merge(exam_by_pool[["final_group_id", "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio",
+                                                "dentro_banda"]], on=["final_group_id", "tramo_h"], how="left")
+    wide = per_band.pivot(index="final_group_id", columns="tramo_h")
     specs = []
     renamed = {}
     for source, name, step, description in ESTIMATION_VALUES_STEP_14:
@@ -280,7 +284,7 @@ def add_backtest_block(core: pd.DataFrame, technique_decision: pd.DataFrame, exa
                 specs.append((source, f"{name}_{band_name}", step, f"{description} (band {band_name})"))
     wide = wide[list(renamed)]
     wide.columns = [renamed[column] for column in wide.columns]
-    core = core.merge(wide, left_on="s11_id_estimacion", right_index=True, how="left")
+    core = core.merge(wide, left_on="s11_final_group_id", right_index=True, how="left")
     return core, specs
 
 
@@ -480,7 +484,7 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
                             LEVEL_ROW, AGGREGATE_SLICER, description))
     for name, step, description in RAW_MEASURES:
         legend_rows.append((name, step, LEVEL_ROW, AGGREGATE_SUM, description))
-    legend_rows += [("s02_rol", "02", LEVEL_ROW, AGGREGATE_SLICER, "entrenamiento · examen · pendiente_cierre · proyeccion"),
+    legend_rows += [("s02_rol", "02", LEVEL_ROW, AGGREGATE_SLICER, "entrenamiento · examen · proyeccion"),
                     ("s02_es_mes_en_curso", "02", LEVEL_ROW, AGGREGATE_SLICER, "1 in the current month")]
     for name, step, description in CALENDAR_MEASURES:
         legend_rows.append((name, step, LEVEL_ROW, AGGREGATE_SUM, description))

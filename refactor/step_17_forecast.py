@@ -380,21 +380,24 @@ def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, 
 
 def rate_of_rows(future: pd.DataFrame, series_estimate: pd.DataFrame, pool_rates: pd.DataFrame, pool_reference: pd.DataFrame,
                  rated_units: pd.DataFrame, backtest: dict, forecast_units: pd.DataFrame, configuration: Config) -> pd.DataFrame:
-    """The rate of every future row: pool (with the credibility shift), mandatory cell, or global; and its band."""
-    estimate = series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "z", "tasa_propia", "peldano"]]
-    future = future.drop(columns=[column for column in (ESTIMATION_ID_COLUMN, "z", "tasa_propia", "peldano", "tecnica",
+    """The rate of every future row: its group's prediction (moved toward its credibility reference),
+    mandatory cell, or global; and its band."""
+    estimate = series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "z", "group_rate", "ref_rate"]]
+    future = future.drop(columns=[column for column in (ESTIMATION_ID_COLUMN, "z", "group_rate", "ref_rate", "tecnica",
                                                         "tasa_pool_h", "tasa_pool", "tasa", "origen_tasa")
                                   if column in future.columns])
     future = future.merge(estimate, on=SERIES_ID_COLUMN, how="left")
     future = future.merge(pool_rates, on=[ESTIMATION_ID_COLUMN, "h"], how="left")
     future = future.merge(pool_reference[[ESTIMATION_ID_COLUMN, "tasa_pool"]], on=ESTIMATION_ID_COLUMN, how="left")
 
-    # the pool rate, shifted by the series' own level in proportion to its credibility
+    # the group's predicted rate, moved toward its credibility reference by (1 − z) of the difference
+    # of levels (logit scale): the same blend as step 11, applied to the prediction
     pool_rate = future["tasa_pool_h"]
     shift = np.zeros(len(future))
     if configuration.apply_credibility_shift:
-        borrows = (future["peldano"] > 0) & future["tasa_propia"].notna() & future["tasa_pool"].notna()
-        shift = np.where(borrows, future["z"].fillna(0) * (logit(future["tasa_propia"].fillna(0.5)) - logit(future["tasa_pool"].fillna(0.5))), 0.0)
+        blended = (future["z"] < 1) & future["ref_rate"].notna() & future["group_rate"].notna()
+        shift = np.where(blended, (1 - future["z"].fillna(1)) * (logit(future["ref_rate"].fillna(0.5))
+                                                                  - logit(future["group_rate"].fillna(0.5))), 0.0)
     future["tasa"] = np.where(pool_rate.notna(), inverse_logit(logit(pool_rate.fillna(0.5)) + shift), np.nan)
     future["origen_tasa"] = np.where(pool_rate.notna(), RATE_FROM_POOL, None)
 

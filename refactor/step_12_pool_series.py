@@ -1,12 +1,12 @@
 """
-step_12_pool_series.py — The monthly series of every estimation id: what the backtest judges.
+step_12_pool_series.py — The monthly series of every final group: what the backtest judges.
 
-After the ladder (step 11) every estimable series takes its rate from an ESTIMATION ID:
-itself (rung 0) or the pattern of the relative it chose. The rate that will be forecast
-is the rate of that estimation id, month by month. This step builds that monthly series:
-for every chosen estimation id, the units due and renewed of EVERY series that matches its
-pattern are summed month by month (big siblings included: the pattern decides who computes
-the number), and its rate is Σ renewed / Σ due of the month.
+After the ladder (steps 10-11) every estimable series belongs to ONE final group, and the
+group lends its rate to its series. The rate that will be forecast is the rate of that
+group, month by month. This step builds that monthly series: for every final group, the
+units due and renewed of ITS series (the partition of step 10: every series in one group)
+are summed month by month, and its rate is Σ renewed / Σ due of the month. Grouping by the
+final group id, the totals add up to the raw.
 
 Only closed truth months enter (entrenamiento, examen): the gaps and the future have no
 rate. Every id also gets a reference row: its months, its support (the median units due
@@ -16,7 +16,7 @@ money they have to predict, and its GATE:
   · soporte  support below the floor: not judged, it will take the challenger
 
 Actions (logged as they are done):
-  1. the estimation ids chosen in step 11, and the series that match each one
+  1. the final groups of step 10 and their series
   2. the monthly series of every id (units due and renewed summed; rate)
   3. the reference of every id: months, support, rate, series, money, gate
   4. check the series and the reference                             checks 1-3
@@ -26,7 +26,7 @@ Actions (logged as they are done):
 
 Checks (logged as they are made, numbered, at the level of their status):
    1. every chosen estimation id has a monthly series
-   2. the support of every id equals the support of its pool in step 10
+   2. the support of every group equals its support in step 10
    3. every monthly rate is between 0 and 1                         (warning only)
    4-5. tables sff_pool_serie and sff_pool_referencia written and read back
 
@@ -39,16 +39,16 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, GATE_SUPPORT, PATTERN_COLUMN,
+from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, GATE_SUPPORT,
                          RATE_COLUMN, SERIES_ID_COLUMN, TABLE_POOL_REFERENCE, TABLE_POOL_SERIES)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
 STEP_LABEL = "12"
 STEP_NAME = "POOL SERIES"
-STEP_PURPOSE = ("build the monthly series of the rate of every estimation id chosen by the ladder, summing every "
-                "series that matches it; this is the series the backtest judges and the forecast extends")
-STEP_ACTIONS = ["the estimation ids chosen in step 11, and the series that match each one",
+STEP_PURPOSE = ("build the monthly series of the rate of every final group of the ladder, summing every "
+                "series in it; this is the series the backtest judges and the forecast extends")
+STEP_ACTIONS = ["the final groups of step 10 and their series",
                 "the monthly series of every id (units due and renewed summed; rate)",
                 "the reference of every id: months, support, rate, series, money, gate",
                 "check the series and the reference (checks 1-3)",
@@ -61,20 +61,19 @@ SUPPORT_TOLERANCE = 1e-9
 LARGEST_SHOWN = 5
 
 
-def build_pool_series(rated_units: pd.DataFrame, relatives: pd.DataFrame, pools: pd.DataFrame,
-                      series_estimate: pd.DataFrame, configuration: Config) -> tuple:
-    """The monthly series and the reference of every chosen estimation id; checked and written."""
+def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: pd.DataFrame,
+                      configuration: Config) -> tuple:
+    """The monthly series and the reference of every final group; checked and written."""
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
     check_log = []
     period_column = configuration.period_col
 
-    # [1] the chosen ids (only estimable series have a pattern) and who matches each
-    chosen = series_estimate[series_estimate[ESTIMATION_ID_COLUMN].isin(set(relatives[PATTERN_COLUMN]))]
-    chosen_ids = set(chosen[ESTIMATION_ID_COLUMN])
-    membership = (relatives[relatives[PATTERN_COLUMN].isin(chosen_ids)][[SERIES_ID_COLUMN, PATTERN_COLUMN]]
-                  .drop_duplicates().rename(columns={PATTERN_COLUMN: ESTIMATION_ID_COLUMN}))
-    configuration.log_action(STEP_LABEL, 1, f"{len(chosen_ids):,} estimation ids chosen by {len(chosen):,} series; "
-                                            f"{len(membership):,} (series, id) memberships")
+    # [1] the final groups of step 10 (the estimable series) and their series: a partition
+    membership = ladder["groups"][[SERIES_ID_COLUMN, "final_group_id"]].rename(columns={"final_group_id": ESTIMATION_ID_COLUMN})
+    chosen = series_estimate[series_estimate[SERIES_ID_COLUMN].isin(set(membership[SERIES_ID_COLUMN]))]
+    chosen_ids = set(membership[ESTIMATION_ID_COLUMN])
+    configuration.log_action(STEP_LABEL, 1, f"{len(chosen_ids):,} final groups of {len(chosen):,} series "
+                                            f"(each series in one group)")
 
     # [2] the monthly series: every matching series summed, month by month
     history = rated_units[rated_units[RATE_COLUMN].notna()][[SERIES_ID_COLUMN, period_column, CALENDAR_ROLE_COLUMN,
@@ -87,7 +86,7 @@ def build_pool_series(rated_units: pd.DataFrame, relatives: pd.DataFrame, pools:
                         series_en_el_mes=(SERIES_ID_COLUMN, "nunique"))
                    .reset_index().sort_values([ESTIMATION_ID_COLUMN, period_column]).reset_index(drop=True))
     pool_series["tasa"] = pool_series["renovadas"] / pool_series["vencen"].where(pool_series["vencen"] > 0)
-    configuration.log_action(STEP_LABEL, 2, f"{len(pool_series):,} id × month rows; a series has "
+    configuration.log_action(STEP_LABEL, 2, f"{len(pool_series):,} group × month rows; a group has "
                                             f"{pool_series.groupby(ESTIMATION_ID_COLUMN).size().median():.0f} months (median)")
 
     # [3] the reference of every id
@@ -100,16 +99,16 @@ def build_pool_series(rated_units: pd.DataFrame, relatives: pd.DataFrame, pools:
     # [4] the checks
     configuration.log_action(STEP_LABEL, 4, "checking the series and the reference")
     missing_ids = chosen_ids - set(pool_series[ESTIMATION_ID_COLUMN])
-    configuration.log_check(STEP_LABEL, check_log, "every chosen estimation id has a monthly series", not missing_ids,
+    configuration.log_check(STEP_LABEL, check_log, "every final group has a monthly series", not missing_ids,
                             failure_detail=f"{len(missing_ids):,} ids without months: {sorted(missing_ids)[:5]}",
                             context=f"{len(chosen_ids):,} ids")
-    compared = pool_reference.merge(pools[[PATTERN_COLUMN, "n_pool"]].rename(columns={PATTERN_COLUMN: ESTIMATION_ID_COLUMN,
-                                                                                      "n_pool": "n_pool_paso_10"}),
-                                    on=ESTIMATION_ID_COLUMN, how="left")
+    support_in_step_10 = (ladder["groups"].drop_duplicates("final_group_id")
+                          .set_index("final_group_id")["group_support"].rename("n_pool_paso_10"))
+    compared = pool_reference.join(support_in_step_10, on=ESTIMATION_ID_COLUMN)
     mismatched = compared[(compared["n_pool"] - compared["n_pool_paso_10"]).abs() > SUPPORT_TOLERANCE]
-    configuration.log_check(STEP_LABEL, check_log, "the support of every id equals the support of its pool in step 10",
+    configuration.log_check(STEP_LABEL, check_log, "the support of every group equals its support in step 10",
                             mismatched.empty,
-                            failure_detail=f"{len(mismatched):,} ids whose support differs from step 10",
+                            failure_detail=f"{len(mismatched):,} groups whose support differs from step 10",
                             examples=mismatched[[ESTIMATION_ID_COLUMN, "n_pool", "n_pool_paso_10"]])
     out_of_range = pool_series[(pool_series["tasa"] < 0) | (pool_series["tasa"] > 1)]
     configuration.log_check(STEP_LABEL, check_log, "every monthly rate is between 0 and 1", out_of_range.empty,
@@ -126,13 +125,13 @@ def build_pool_series(rated_units: pd.DataFrame, relatives: pd.DataFrame, pools:
     configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
 
     # [7] the ids by gate, and the largest ones
-    configuration.log_action(STEP_LABEL, 7, f"estimation ids by gate (nivel: support ≥ {configuration.support_floor:.0f}, "
+    configuration.log_action(STEP_LABEL, 7, f"final groups by gate (nivel: support ≥ {configuration.support_floor:.0f}, "
                                             f"judged by the backtest; soporte: below it, takes the challenger):")
     configuration.show_table(pool_reference.groupby("gate")
                              .agg(ids=(ESTIMATION_ID_COLUMN, "size"), series_que_lo_usan=("series_que_lo_usan", "sum"),
                                   usd_por_predecir=("usd_por_predecir", "sum"), meses_mediana=("meses", "median"))
                              .reset_index())
-    configuration.logger.doc(f"[{STEP_LABEL}] the {LARGEST_SHOWN} ids with the most money to predict:")
+    configuration.logger.doc(f"[{STEP_LABEL}] the {LARGEST_SHOWN} groups with the most money to predict:")
     configuration.show_table(pool_reference.nlargest(LARGEST_SHOWN, "usd_por_predecir"))
     return pool_series, pool_reference
 

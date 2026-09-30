@@ -11,7 +11,8 @@ HOW THE TEST WORKS:
   · for every exam month T and horizon h (origin T − h), every series with renewals in T is
     predicted as step 17 would have predicted it at the origin:
         its estimation id's technique (step 14) on the id's months up to T − h, shifted by
-        its credibility (z × (own level − pool level), both measured up to T − h);
+        moved toward its credibility reference by (1 − z) × (reference level − group level),
+        both levels measured up to T − h;
         no estimation id: the rate of its mandatory cell up to T − h (then the global one)
     predicted renewed units = predicted rate × its units due in T (the real pipeline)
   · THE SPREADSHEET: what the business does today — for every grain of baseline_grains, the
@@ -68,7 +69,7 @@ STEP_OUTPUT = "real vs predicted renewals by exam month, horizon and method · t
 
 
 def examine_portfolio(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, pool_series: pd.DataFrame,
-                      backtest: dict, configuration: Config) -> tuple:
+                      backtest: dict, configuration: Config, reference_members: pd.DataFrame = None) -> tuple:
     """The framework and the spreadsheet predicting every series in the exam months."""
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
     check_log = []
@@ -87,7 +88,8 @@ def examine_portfolio(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, 
                          & (rated_units[units_due] > 0)].copy()
     closed["_celda"] = join_columns(closed, configuration.business_mandatory_dims)
     real["_celda"] = join_columns(real, configuration.business_mandatory_dims)
-    real = real.merge(series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "peldano", "z"]], on=SERIES_ID_COLUMN, how="left")
+    real = real.merge(series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "z", "credibility_ref_id"]],
+                      on=SERIES_ID_COLUMN, how="left")
     decision = backtest["decision"].set_index([ESTIMATION_ID_COLUMN, "tramo_h"])["tecnica"]
     pool_truth = pool_series[pool_series["rol"].isin(TRUTH_ROLES) & pool_series["tasa"].notna() & (pool_series["vencen"] > 0)]
     pool_ids = set(pool_truth[ESTIMATION_ID_COLUMN])
@@ -102,7 +104,8 @@ def examine_portfolio(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, 
 
             # [2] the framework
             month_rows["pred_" + METHOD_FRAMEWORK] = framework_rates(month_rows, known, pool_truth, pool_ids, decision,
-                                                                    origin, horizon, configuration) * month_rows[units_due]
+                                                                    origin, horizon, configuration,
+                                                                    reference_members) * month_rows[units_due]
             # [3] the spreadsheet, for every grain
             for grain in configuration.baseline_grains:
                 month_rows["pred_hoja_" + grain] = spreadsheet_rates(month_rows, known, grain, origin, configuration) * month_rows[units_due]
@@ -154,13 +157,19 @@ def examine_portfolio(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, 
 
 
 def framework_rates(month_rows: pd.DataFrame, known: pd.DataFrame, pool_truth: pd.DataFrame, pool_ids: set,
-                    decision: pd.Series, origin, horizon: int, configuration: Config) -> np.ndarray:
+                    decision: pd.Series, origin, horizon: int, configuration: Config,
+                    reference_members: pd.DataFrame = None) -> np.ndarray:
     """The rate the framework would have predicted at the origin for every series of the month."""
     band_name = band_of_horizon(int(horizon), configuration.horizon_bands)
     period_column = configuration.period_col
     units_due, renewed = configuration.pipeline_units_col, configuration.renewed_units_col
     pool_known = pool_truth[pool_truth[period_column] <= origin]
-    own_level = known.groupby(SERIES_ID_COLUMN)[renewed].sum() / known.groupby(SERIES_ID_COLUMN)[units_due].sum()
+    # the level of every credibility reference with what was known at the origin (all its series)
+    reference_level = pd.Series(dtype=float)
+    if reference_members is not None and len(reference_members):
+        known_by_reference = known.merge(reference_members, on=SERIES_ID_COLUMN)
+        grouped = known_by_reference.groupby("credibility_ref_id")
+        reference_level = grouped[renewed].sum() / grouped[units_due].sum()
     cell_level = known.groupby("_celda")[renewed].sum() / known.groupby("_celda")[units_due].sum()
     global_level = known[renewed].sum() / known[units_due].sum()
     predicted_pool, pool_level = {}, {}
@@ -181,9 +190,9 @@ def framework_rates(month_rows: pd.DataFrame, known: pd.DataFrame, pool_truth: p
         estimation_id = row[ESTIMATION_ID_COLUMN]
         if estimation_id in predicted_pool:
             rate = predicted_pool[estimation_id]
-            own = own_level.get(row[SERIES_ID_COLUMN], np.nan)
-            if configuration.apply_credibility_shift and row["peldano"] > 0 and np.isfinite(own):
-                rate = float(inverse_logit(logit(rate) + row["z"] * (logit(own) - logit(pool_level[estimation_id]))))
+            reference = reference_level.get(row["credibility_ref_id"], np.nan) if pd.notna(row["credibility_ref_id"]) else np.nan
+            if configuration.apply_credibility_shift and row["z"] < 1 and np.isfinite(reference) and 0 < reference < 1:
+                rate = float(inverse_logit(logit(rate) + (1 - row["z"]) * (logit(reference) - logit(pool_level[estimation_id]))))
         else:
             rate = cell_level.get(row["_celda"], global_level)
         rates.append(rate)

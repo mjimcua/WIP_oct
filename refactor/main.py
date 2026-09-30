@@ -27,7 +27,7 @@ from step_06_series_routes import build_series_routes
 from step_07_support_bound import build_support_bound
 from step_08_rate_series import build_rate_series
 from step_09_dimensions import analyse_dimensions
-from step_10_relatives import build_relatives
+from step_10_ladder_groups import build_ladder_groups
 from step_11_ladder import climb_the_ladder
 from step_12_pool_series import build_pool_series
 from step_13_dynamics import measure_dynamics
@@ -159,10 +159,10 @@ def run(configuration: Config) -> dict:
     support_bound = build_support_bound(forecast_units, configuration)   # step 07
     rated_units, series_rate = build_rate_series(forecast_units, series_table, configuration)   # step 08
     dimension_decision, dimension_pairs = analyse_dimensions(series_rate, lookups["lookup_fs"], configuration)   # step 09
-    relatives, pools = build_relatives(rated_units, series_rate, lookups["lookup_fs"], dimension_decision,
-                                       configuration)                                            # step 10
-    series_estimate, money_by_level = climb_the_ladder(series_rate, relatives, pools, configuration)   # step 11
-    pool_series, pool_reference = build_pool_series(rated_units, relatives, pools, series_estimate, configuration)   # step 12
+    ladder = build_ladder_groups(rated_units, series_rate, lookups["lookup_fs"], dimension_decision,
+                                 configuration)                                                   # step 10
+    series_estimate, money_by_level = climb_the_ladder(series_rate, ladder, configuration)   # step 11
+    pool_series, pool_reference = build_pool_series(rated_units, ladder, series_estimate, configuration)   # step 12
     pool_dynamics, portfolio_profile, portfolio_dynamics = measure_dynamics(pool_series, pool_reference, configuration)   # step 13
     backtest = run_backtest(pool_series, pool_reference, configuration)                            # step 14
     uplift_cells, contract_check = estimate_uplift(fine_table, configuration)                       # step 15
@@ -171,7 +171,7 @@ def run(configuration: Config) -> dict:
                                  uplift_cells, uplift_verdict, rated_units, configuration)          # step 17
     results = dict(pool_series=pool_series, pool_reference=pool_reference,
                    backtest=backtest, pool_dynamics=pool_dynamics, portfolio_profile=portfolio_profile,
-                   portfolio_dynamics=portfolio_dynamics, relatives=relatives, pools=pools,
+                   portfolio_dynamics=portfolio_dynamics, ladder=ladder,
                    series_estimate=series_estimate, money_by_level=money_by_level,
                    dimension_decision=dimension_decision, dimension_pairs=dimension_pairs,
                    raw=calendared_raw, fine_table=fine_table, forecast_units=forecast_units, lookups=lookups,
@@ -179,7 +179,8 @@ def run(configuration: Config) -> dict:
     results.update(uplift_cells=uplift_cells, contract_check=contract_check, uplift_backtest=uplift_backtest,
                    uplift_verdict=uplift_verdict, forecast=forecast)
     results["portfolio_exam"], results["portfolio_exam_summary"] = examine_portfolio(
-        rated_units, series_estimate, pool_series, backtest, configuration)                          # step 19
+        rated_units, series_estimate, pool_series, backtest, configuration,
+        reference_members=ladder["reference_members"])                                               # step 19
     results["time_series"], results["forecast_total"] = build_time_series_and_total(
         time_series_rows, fine_table, forecast["forecast"], configuration)                      # step 20
     results["time_series_rows"] = time_series_rows
