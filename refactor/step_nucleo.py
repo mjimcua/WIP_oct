@@ -31,7 +31,7 @@ Actions (logged as they are done):
   1. the rows of the extract (the fine table) with their raw and step-02 measures and their ids
   2. the gap rows of step 08
   3. the values of the forecast unit (steps 04, 07), if they have run
-  4. the values of the series (steps 06, 08, 11) and of its estimation id (step 14), if they have run
+  4. the forecast rows (step 17), the final block, and the forecast series dimension (one row per series)
   5. the legend: every column, its step, its level and how to aggregate it
   6. check the core against the extract and the legend              checks 1-4
   7. write the core and its legend                                  checks 5-6
@@ -53,14 +53,15 @@ import numpy as np
 import pandas as pd
 
 from config import Config, join_columns
-from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN, COMPOSITION_ID_COLUMN,
+from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN,
                          FINE_ROWS_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_SIMULATED, ROLE_TEST,
                          ROLE_TRAIN, ROUTE_COLUMN, ROW_FROM_GAP, ROW_FROM_RAW, ROW_ORIGIN_COLUMN,
                          S0_PIPELINE_UNITS_COLUMN, S0_PIPELINE_USD_COLUMN, S0_RENEWED_UNITS_COLUMN,
                          S0_RENEWED_USD_COLUMN, SERIES_ID_COLUMN, SIGN_COLUMN, SYNTHETIC_COLUMN, TABLE_CORE,
-                         TABLE_CORE_LEGEND, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_RENEWED,
-                         TOTAL_ORIGIN_SIMULATED, TOTAL_ORIGIN_TOTAL, TS_PROJECTED, TS_REAL, TS_REENTRY,
-                         UNIT_ID_COLUMN, UNIVERSE_COLUMN, UPLIFT_CELL_ID_COLUMN, TRUTH_ROLES as TRUTH_ROLES_OF_CORE)
+                         TABLE_CORE_LEGEND, TABLE_FORECAST_SERIES, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED,
+                         TOTAL_ORIGIN_RENEWED, TOTAL_ORIGIN_SIMULATED, TOTAL_ORIGIN_TOTAL, TS_PROJECTED, TS_REAL,
+                         TS_REENTRY, UNIT_ID_COLUMN, UNIVERSE_COLUMN, UPLIFT_CELL_ID_COLUMN,
+                         TRUTH_ROLES as TRUTH_ROLES_OF_CORE)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ STEP_PURPOSE = ("put the whole story of every row in one wide table, left to rig
 STEP_ACTIONS = ["the rows of the extract (the fine table) with their raw and step-02 measures and their ids",
                 "the gap rows of step 08",
                 "the values of the forecast unit (steps 04, 07), if they have run",
-                "the values of the series (steps 06, 08, 11) and of its estimation id (step 14), if they have run",
+                "the forecast rows (step 17), the final block, and the forecast series dimension (one row per series)",
                 "the legend: every column, its step, its level and how to aggregate it",
                 "check the core against the extract and the legend (checks 1-4)",
                 "write the core and its legend (checks 5-6)",
@@ -162,17 +163,23 @@ SERIES_VALUES_DYNAMICS = [("phi", "s13_series_phi", "13", "volatility of its own
                           ("measurable", "s13_series_measurable", "13", "yes · low_support (< 30 a month: not conclusive) · short_history"),
                           ("differs_from_composition", "s13_series_differs", "13", "1 when its trend or season differs from its composition's")]
 # per forecast series: the exam of its chosen technique (every exam month and horizon), as ratios repeated on its rows
-SERIES_VALUES_EXAM = [("exam_status", "s19_exam_status", "19", "tested · composition_below_floor · not_estimable · no_exam_months"),
-                      ("exam_mae_pp", "s19_exam_mae_pp", "19", "mean absolute error of its rate in the exam (pp)"),
-                      ("exam_bias_pp", "s19_exam_bias_pp", "19", "mean error of its rate in the exam (pp): + over-predicts"),
-                      ("exam_wape", "s19_exam_wape", "19", "Σ |predicted − real| / Σ real renewed units in the exam"),
-                      ("exam_coverage", "s19_exam_coverage", "19", "share of its exam predictions whose real rate fell inside the interval")]
-# … and as counts and units on its FIRST row only: a SUM over any filter counts every series once
-SERIES_SUMMABLE_EXAM = [("exam_predictions", "s19_exam_predictions", "19", "exam predictions (first row of the series only: SUM)"),
-                        ("exam_in_band", "s19_exam_in_band", "19", "exam predictions inside their interval (first row only: SUM)"),
-                        ("exam_pred_units", "s19_exam_pred_units", "19", "renewed units predicted in the exam (first row only: SUM)"),
-                        ("exam_real_units", "s19_exam_real_units", "19", "renewed units real in the exam (first row only: SUM)"),
-                        ("exam_abs_err_units", "s19_exam_abs_err_units", "19", "Σ |predicted − real| units in the exam (first row only: SUM)")]
+SERIES_VALUES_EXAM = [("framework_mae_pp", "s19_exam_mae_pp", "19", "mean absolute error of its rate in the exam, framework (pp)"),
+                      ("framework_bias_pp", "s19_exam_bias_pp", "19", "mean error of its rate in the exam, framework (pp): + over-predicts"),
+                      ("framework_wape", "s19_exam_wape", "19", "Σ |predicted − real| / Σ real renewed units in the exam, framework"),
+                      ("framework_coverage", "s19_exam_coverage", "19", "share of its framework predictions whose real rate fell inside the interval"),
+                      ("raw_mae_pp", "s19_raw_mae_pp", "19", "the same error predicting the series alone with its own history (raw)"),
+                      ("raw_coverage", "s19_raw_coverage", "19", "share of its raw predictions inside their interval"),
+                      ("improvement_mae_pp", "s19_improvement_mae_pp", "19", "raw error − framework error (pp): + the framework predicts it better")]
+# … and as counts and units: in the dimension a SUM over any filter counts every forecast series once
+SERIES_SUMMABLE_EXAM = [("framework_predictions", "s19_exam_predictions", "19", "exam predictions (SUM)"),
+                        ("framework_in_band", "s19_exam_in_band", "19", "framework predictions inside their interval (SUM)"),
+                        ("framework_pred_units", "s19_exam_pred_units", "19", "renewed units predicted by the framework (SUM)"),
+                        ("framework_real_units", "s19_exam_real_units", "19", "renewed units real in the exam (SUM)"),
+                        ("framework_abs_err_units", "s19_exam_abs_err_units", "19", "Σ |predicted − real| units, framework (SUM)"),
+                        ("raw_in_band", "s19_raw_in_band", "19", "raw predictions inside their interval (SUM)"),
+                        ("raw_abs_err_units", "s19_raw_abs_err_units", "19", "Σ |predicted − real| units, raw (SUM)"),
+                        ("raw_real_units", "s19_raw_real_units", "19", "renewed units real in the exam, raw rows (SUM)"),
+                        ("raw_predictions", "s19_raw_predictions", "19", "raw exam predictions (SUM)")]
 # step 13, per estimation id (the dynamics of the rate the series takes)
 ESTIMATION_VALUES_STEP_13 = [("phi", "s13_phi", "13", "φ of the estimation id: observed variation of its rate / binomial noise (≈ 1: nothing to model)"),
                              ("tendencia", "s13_tendencia", "13", "+1 / −1 significant trend of the rate, 0 none"),
@@ -239,32 +246,9 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
             blocks_present.append(block_specs)
     configuration.log_action(STEP_LABEL, 3, f"unit blocks added: {[specs[0][2] for specs in blocks_present] or 'none'}")
 
-    # [4] the values of the series and of its estimation id
-    ladder_stages = stages_of_every_series(ladder_stages, series_rate)
-    if series_dynamics is not None:
-        core = add_block(core, series_dynamics, SERIES_ID_COLUMN, "s03_fs_id", SERIES_VALUES_DYNAMICS)
-        blocks_present.append(SERIES_VALUES_DYNAMICS)
-    if series_exam is not None:
-        core = add_block(core, series_exam, SERIES_ID_COLUMN, "s03_fs_id", SERIES_VALUES_EXAM + SERIES_SUMMABLE_EXAM)
-        # the counts and units only on the first row of the extract of every series: SUM counts each series once
-        first_rows = core[core[ROW_ORIGIN_COLUMN] == ROW_FROM_RAW].groupby("s03_fs_id").head(1).index
-        summable_names = [name for _, name, _, _ in SERIES_SUMMABLE_EXAM]
-        core.loc[~core.index.isin(first_rows), summable_names] = np.nan
-        blocks_present.append(SERIES_VALUES_EXAM + SERIES_SUMMABLE_EXAM)
-    series_blocks = [(series_table, SERIES_VALUES_STEP_06), (series_rate, SERIES_VALUES_STEP_08),
-                     (ladder_stages, SERIES_VALUES_STEP_10), (series_estimate, SERIES_VALUES_STEP_11)]
-    for block_frame, block_specs in series_blocks:
-        if block_frame is not None:
-            core = add_block(core, block_frame, SERIES_ID_COLUMN, "s03_fs_id", block_specs)
-            blocks_present.append(block_specs)
-    if pool_dynamics is not None and len(pool_dynamics) and "s10_stage3_id" in core.columns:
-        dynamics_values = pool_dynamics[[COMPOSITION_ID_COLUMN] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
-        dynamics_values = dynamics_values.rename(columns={source: name for source, name, _, _ in ESTIMATION_VALUES_STEP_13})
-        core = core.merge(dynamics_values, left_on="s10_stage3_id", right_on=COMPOSITION_ID_COLUMN, how="left").drop(columns=COMPOSITION_ID_COLUMN)
-        blocks_present.append(ESTIMATION_VALUES_STEP_13)
-    if technique_decision is not None and "s10_stage3_id" in core.columns:
-        core, backtest_specs = add_backtest_block(core, technique_decision, exam_by_pool, configuration)
-        blocks_present.append(backtest_specs)
+    # [4] the forecast series dimension: one row per forecast series with everything of its level
+    #     (route, own rate, the 4 stages, its composition and credibility, technique, dynamics, exam);
+    #     the core keeps only what belongs to a row (or a unit) and joins it by s03_fs_id
     if forecast is not None:
         forecast_values = forecast.assign(_clave=forecast_keys(forecast), _vencen_unidades=forecast[configuration.pipeline_units_col],
                                           _vencen_usd=forecast[configuration.pipeline_usd_col])
@@ -278,20 +262,26 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
     if "s04_filas_finas" in core.columns:
         core.loc[core[ROW_ORIGIN_COLUMN] == ROW_FROM_GAP, "s04_filas_finas"] = 0     # a gap adds no fine row
     core = core.sort_values(["s03_fs_id", configuration.period_col, ROW_ORIGIN_COLUMN]).reset_index(drop=True)
-    configuration.log_action(STEP_LABEL, 4, f"blocks present: {sorted({specs[0][2] for specs in blocks_present})} · "
-                                            f"the core has {len(core):,} rows × {len(core.columns)} columns")
+    dimension = build_series_dimension(core, series_table, series_rate, series_estimate, ladder_stages, pool_dynamics,
+                                       technique_decision, exam_by_pool, series_dynamics, series_exam, configuration)
+    configuration.log_action(STEP_LABEL, 4, f"the core has {len(core):,} rows × {len(core.columns)} columns · the forecast series "
+                                            f"dimension {len(dimension):,} rows × {len(dimension.columns)} columns, joined by s03_fs_id")
 
     # [5] the legend
     legend = core_legend(core, dimension_columns, blocks_present, configuration)
+    legend = pd.concat([legend.assign(tabla="sff_" + TABLE_CORE), dimension_legend(dimension)], ignore_index=True)
     configuration.log_action(STEP_LABEL, 5, f"legend of {len(legend)} columns: {legend['nivel'].value_counts().to_dict()}")
 
     # [6] the checks
     configuration.log_action(STEP_LABEL, 6, "checking the core against the extract and the legend")
-    check_core(core, fine_table, gap_rows, legend, blocks_present, forecast_total, configuration, check_log)
+    check_core(core, fine_table, gap_rows, legend[legend["tabla"] == "sff_" + TABLE_CORE], blocks_present, forecast_total,
+               configuration, check_log)
+    check_dimension(core, dimension, series_exam, configuration, check_log)
 
     # [7] the tables, written
     configuration.log_action(STEP_LABEL, 7, "writing the core and its legend")
     configuration.write_table(STEP_LABEL, check_log, core, TABLE_CORE)
+    configuration.write_table(STEP_LABEL, check_log, dimension, TABLE_FORECAST_SERIES)
     configuration.write_table(STEP_LABEL, check_log, legend, TABLE_CORE_LEGEND)
 
     # [8] the count of the checks; stop if anything failed
@@ -299,9 +289,80 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
     configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
 
     # [9] one series as it looks in the core, how to read it in Power BI, and the questions answered from it
-    log_core_report(core, configuration)
+    log_core_report(core, dimension, configuration)
     log_core_answers(core, configuration)
-    return core, legend
+    return core, legend, dimension
+
+
+DIMENSION_SUMMARY_VALUES = [("s17_esperado_usd_total", "17", "USD expected to renew in the months to predict (sum of its rows)"),
+                            ("s17_pct_usd_high", "17", "share of its expected USD with confidence high"),
+                            ("s17_pct_usd_medium", "17", "share of its expected USD with confidence medium"),
+                            ("s17_pct_usd_low", "17", "share of its expected USD with confidence low"),
+                            ("s17_confidence", "17", "the confidence of most of its expected USD")]
+
+
+def build_series_dimension(core: pd.DataFrame, series_table, series_rate, series_estimate, ladder_stages, pool_dynamics,
+                           technique_decision, exam_by_pool, series_dynamics, series_exam, configuration: Config) -> pd.DataFrame:
+    """sff_forecast_series: one row per forecast series of the core, with every value of its level."""
+    dimension = pd.DataFrame({"s03_fs_id": sorted(core["s03_fs_id"].dropna().unique())})
+    ladder_stages = stages_of_every_series(ladder_stages, series_rate)
+    for block_frame, block_specs in ((series_table, SERIES_VALUES_STEP_06), (series_rate, SERIES_VALUES_STEP_08),
+                                     (ladder_stages, SERIES_VALUES_STEP_10), (series_estimate, SERIES_VALUES_STEP_11),
+                                     (series_dynamics, SERIES_VALUES_DYNAMICS),
+                                     (series_exam, SERIES_VALUES_EXAM + SERIES_SUMMABLE_EXAM)):
+        if block_frame is not None:
+            dimension = add_block(dimension, block_frame, SERIES_ID_COLUMN, "s03_fs_id", block_specs)
+    if pool_dynamics is not None and len(pool_dynamics) and "s10_stage3_id" in dimension.columns:
+        dynamics_values = pool_dynamics[[COMPOSITION_ID_COLUMN] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
+        dynamics_values = dynamics_values.rename(columns={source: name for source, name, _, _ in ESTIMATION_VALUES_STEP_13})
+        dimension = dimension.merge(dynamics_values, left_on="s10_stage3_id", right_on=COMPOSITION_ID_COLUMN,
+                                    how="left").drop(columns=COMPOSITION_ID_COLUMN)
+    if technique_decision is not None and "s10_stage3_id" in dimension.columns:
+        dimension, _ = add_backtest_block(dimension, technique_decision, exam_by_pool, configuration)
+    # the money to predict and its confidence, from the rows of the core
+    if "s17_confidence" in core.columns:
+        future = core[core["s17_esperado_usd"].notna()]
+        by_label = future.pivot_table(index="s03_fs_id", columns="s17_confidence", values="s17_esperado_usd", aggfunc="sum").fillna(0.0)
+        total = by_label.sum(axis=1)
+        summary = pd.DataFrame({"s17_esperado_usd_total": total})
+        for label in ("high", "medium", "low"):
+            summary[f"s17_pct_usd_{label}"] = (by_label[label] / total.where(total > 0)) if label in by_label.columns else 0.0
+        summary["s17_confidence"] = by_label.idxmax(axis=1)
+        dimension = dimension.merge(summary, left_on="s03_fs_id", right_index=True, how="left")
+    return dimension
+
+
+def dimension_legend(dimension: pd.DataFrame) -> pd.DataFrame:
+    """The legend of sff_forecast_series: every column with its step and how to aggregate it."""
+    described = {name: (step, description) for _, name, step, description in
+                 SERIES_VALUES_STEP_06 + SERIES_VALUES_STEP_08 + SERIES_VALUES_STEP_10 + SERIES_VALUES_STEP_11
+                 + SERIES_VALUES_DYNAMICS + SERIES_VALUES_EXAM + SERIES_SUMMABLE_EXAM + ESTIMATION_VALUES_STEP_13}
+    described.update({name: (step, description) for name, step, description in DIMENSION_SUMMARY_VALUES})
+    summable = {name for _, name, _, _ in SERIES_SUMMABLE_EXAM} | {"s06_usd_por_predecir", "s17_esperado_usd_total"}
+    rows = [("s03_fs_id", "03", LEVEL_SERIES, "clave: relación 1 → n con sff_nucleo[s03_fs_id]", "the forecast series")]
+    for column_name in dimension.columns[1:]:
+        base = next((name for _, name, _, _ in ESTIMATION_VALUES_STEP_14 if column_name.startswith(name + "_")), None)
+        step, description = described.get(column_name, ("14", next((d for _, n, _, d in ESTIMATION_VALUES_STEP_14 if n == base), ""))
+                                          if base else ("", ""))
+        rows.append((column_name, step, LEVEL_SERIES, AGGREGATE_SUM if column_name in summable else AGGREGATE_SLICER, description))
+    legend = pd.DataFrame(rows, columns=["columna", "paso", "nivel", "como_agregar", "descripcion"])
+    return legend.assign(tabla="sff_" + TABLE_FORECAST_SERIES)
+
+
+def check_dimension(core: pd.DataFrame, dimension: pd.DataFrame, series_exam, configuration: Config, check_log: list) -> None:
+    """Check 6 and 7: one row per forecast series of the core; its exam sums equal step 19's."""
+    configuration.log_check(STEP_LABEL, check_log, "the forecast series dimension has one row per forecast series of the core",
+                            dimension["s03_fs_id"].is_unique and set(dimension["s03_fs_id"]) == set(core["s03_fs_id"].dropna()),
+                            failure_detail="the dimension and the core do not have the same forecast series",
+                            context=f"{len(dimension):,} forecast series")
+    if series_exam is None or "s19_exam_real_units" not in dimension.columns:
+        configuration.log_not_evaluated(STEP_LABEL, check_log, "the exam sums of the dimension equal step 19's", "no exam")
+        return
+    same = (abs(dimension["s19_exam_real_units"].sum() - series_exam["framework_real_units"].sum()) < 1e-6
+            and int(dimension["s19_exam_predictions"].sum()) == int(series_exam["framework_predictions"].sum()))
+    configuration.log_check(STEP_LABEL, check_log, "the exam sums of the dimension equal step 19's (each series once)", same,
+                            failure_detail="the dimension lost or duplicated exam predictions",
+                            context=f"{int(dimension['s19_exam_predictions'].sum()):,} exam predictions")
 
 
 def add_block(core: pd.DataFrame, block_frame: pd.DataFrame, key_column: str, core_key: str, block_specs: list) -> pd.DataFrame:
@@ -651,25 +712,29 @@ def log_core_answers(core: pd.DataFrame, configuration: Config) -> None:
     configuration.show_table(answers)
 
 
-def log_core_report(core: pd.DataFrame, configuration: Config) -> None:
-    """Action 9: one series as it looks in the core, and how to read it in Power BI."""
+def log_core_report(core: pd.DataFrame, dimension: pd.DataFrame, configuration: Config) -> None:
+    """Action 9: one series as it looks in the two tables, and how to read them in Power BI."""
     largest_series = core.groupby("s03_fs_id")["s00_vencen_usd"].sum().idxmax()
-    configuration.log_action(STEP_LABEL, 9, f"the series with the most money, '{largest_series}', as it looks in the "
-                                            f"core (last {MONTHS_SHOWN} closed months; the series values repeat on every row):")
+    configuration.log_action(STEP_LABEL, 9, f"the series with the most money, '{largest_series}': its row of sff_forecast_series "
+                                            f"and its last {MONTHS_SHOWN} closed months in sff_nucleo:")
+    shown = ["s03_fs_id", "s06_ruta", "s08_n_propio", "s08_tasa_propia", "s10_stage3_id", "s10_stage3_support", "s11_tasa_estimada",
+             "s11_nivel_riesgo", "s19_exam_mae_pp", "s19_raw_mae_pp", "s19_exam_coverage", "s17_confidence"]
+    configuration.show_table(dimension[dimension["s03_fs_id"] == largest_series][[column for column in shown if column in dimension.columns]])
     series_rows = core[(core["s03_fs_id"] == largest_series) & core["s02_rol"].isin([ROLE_TRAIN, ROLE_TEST])]
-    shown_columns = [configuration.period_col, ROW_ORIGIN_COLUMN, "s02_rol", "s00_vencen_unidades", "s02_renovadas_unidades",
-                     "s06_ruta", "s08_tasa_propia", "s11_tasa_estimada", "s11_nivel_riesgo", "s14_tecnica_corto",
-                     "s14_examen_err_pp_corto"]
+    shown_columns = [configuration.period_col, ROW_ORIGIN_COLUMN, "s02_rol", "s00_vencen_unidades", "s02_renovadas_unidades"]
     configuration.show_table(series_rows.tail(MONTHS_SHOWN)[[column for column in shown_columns if column in core.columns]])
-    configuration.logger.doc(f"[{STEP_LABEL}] in Power BI: a slicer on s03_fs_id selects one series; the rows are its "
-                             f"months. A rate is a measure (a ratio of sums over the rows selected), never a column; "
-                             f"a value of the series (s06_, s08_, s11_) is read with MAX. Measures to create:")
+    configuration.logger.doc(f"[{STEP_LABEL}] in Power BI: relate sff_forecast_series[s03_fs_id] 1 → n sff_nucleo[s03_fs_id]; a "
+                             f"slicer on the dimension selects forecast series (by id, confidence, risk level, stage, exam…) and "
+                             f"filters their rows. A rate is a measure (a ratio of sums), never a column. Measures to create:")
     configuration.show_table(pd.DataFrame([
         ("Tasa renovación (meses cerrados)",
          "DIVIDE(CALCULATE(SUM(sff_nucleo[s02_renovadas_unidades]), sff_nucleo[s02_rol] IN {\"entrenamiento\", \"examen\"}), "
          "CALCULATE(SUM(sff_nucleo[s00_vencen_unidades]), sff_nucleo[s02_rol] IN {\"entrenamiento\", \"examen\"}))"),
         ("Vence USD", "SUM(sff_nucleo[s00_vencen_usd])"),
-        ("Tasa estimada de la serie", "MAX(sff_nucleo[s11_tasa_estimada])"),
         ("Renovado (real + previsto)", "SUM(sff_nucleo[fin_renovado_usd])  — segmentar por fin_ano, fin_estado, fin_origen"),
         ("Pipeline", "SUM(sff_nucleo[fin_vence_usd])  — segmentar por fin_ano, fin_origen"),
-        ("Nivel de riesgo de la serie", "MAX(sff_nucleo[s11_nivel_riesgo])")], columns=["medida", "DAX"]))
+        ("Examen: dentro del intervalo", "DIVIDE(SUM(sff_forecast_series[s19_exam_in_band]), SUM(sff_forecast_series[s19_exam_predictions]))"),
+        ("Examen: WAPE framework / raw", "DIVIDE(SUM(sff_forecast_series[s19_exam_abs_err_units]), SUM(sff_forecast_series[s19_exam_real_units]))"
+                                        "  ·  the same with s19_raw_abs_err_units")], columns=["medida", "DAX"]))
+
+

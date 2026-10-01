@@ -34,8 +34,8 @@ coverage, route, universe, units and USD to predict) · table sff_series.
 import pandas as pd
 
 from config import ACTIVE_FLAG_VALUES, Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ROLE_PROJECTION, ROLE_TEST, ROLE_TRAIN,
-                         ROLES_IN_ORDER, ROUTE_COLUMN, ROUTE_FUTURE_ONLY, ROUTE_HISTORY_ONLY, ROUTE_PREDICTABLE,
+from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ROLES_IN_ORDER, ROLE_PROJECTION, ROLE_TEST,
+                         ROLE_TRAIN, ROUTE_COLUMN, ROUTE_FUTURE_ONLY, ROUTE_HISTORY_ONLY, ROUTE_PREDICTABLE,
                          SERIES_ID_COLUMN, SERIES_KEY_COLUMN, TABLE_SERIES, UNIT_ID_COLUMN, UNIVERSE_COLUMN,
                          UNIVERSE_MIXED, UNIVERSE_NORMAL, UNIVERSE_TIME_SERIES)
 
@@ -180,6 +180,6 @@ def log_routes_report(series_table: pd.DataFrame, configuration: Config) -> None
     for route in ROUTES_IN_ORDER:
         route_series = series_table[series_table[ROUTE_COLUMN] == route]
         route_usd = route_series["usd_por_predecir"].sum()
-        route_rows.append({"ruta": route, "series": len(route_series), "usd_por_predecir": route_usd,
+        route_rows.append({ROUTE_COLUMN: route, "series": len(route_series), "usd_por_predecir": route_usd,
                            "pct_usd": route_usd / total_usd if total_usd else 0.0})
     configuration.show_table(pd.DataFrame(route_rows))

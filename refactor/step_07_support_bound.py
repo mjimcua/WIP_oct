@@ -113,7 +113,7 @@ def log_bound_report(support_bound: pd.DataFrame, configuration: Config) -> None
         role_units = support_bound[support_bound[CALENDAR_ROLE_COLUMN] == role]
         role_usd = role_units[configuration.pipeline_usd_col].sum()
         independent_total = float(np.sqrt((role_units["moe_usd_max"] ** 2).sum()))
-        role_rows.append({"rol": role, "unidades": len(role_units),
+        role_rows.append({CALENDAR_ROLE_COLUMN: role, "unidades": len(role_units),
                           "moe_pp_mediana": role_units["moe_pp_max"].median() if len(role_units) else np.nan,
                           "usd_vence": role_usd, "moe_usd_total": independent_total,
                           "moe_pct_total": independent_total / role_usd if role_usd else np.nan})

@@ -39,7 +39,8 @@ import pandas as pd
 
 from config import Config
 from step_15_uplift import estimate_cell_uplifts, renewer_rows
-from vocabulario import PATH_CONTRACT, PATH_STATISTICAL, ROLE_TEST, TABLE_UPLIFT_BACKTEST, UPLIFT_CELL_ID_COLUMN
+from vocabulario import (CALENDAR_ROLE_COLUMN, PATH_CONTRACT, PATH_STATISTICAL, ROLE_TEST, TABLE_UPLIFT_BACKTEST,
+                         UPLIFT_CELL_ID_COLUMN)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ def backtest_uplift(fine_table: pd.DataFrame, configuration: Config) -> tuple:
 
     # [2] the renewals of the exam, predicted by both paths
     exam_rows = renewer_rows(fine_table, configuration)
-    exam_rows = exam_rows[exam_rows["rol"] == ROLE_TEST].copy()
+    exam_rows = exam_rows[exam_rows[CALENDAR_ROLE_COLUMN] == ROLE_TEST].copy()
     exam_rows["pred_" + PATH_STATISTICAL] = exam_rows["_denominador"] * exam_rows[UPLIFT_CELL_ID_COLUMN].map(
         cells.set_index(UPLIFT_CELL_ID_COLUMN)["uplift"])
     discount = configuration.discount_value_column

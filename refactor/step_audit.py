@@ -13,7 +13,6 @@ these tables explain the whole way it came from, joined to the core by its keys:
   sff_series_backtest            forecast series × exam month × h × technique s03_fs_id
   sff_series_technique_summary   forecast series × band × technique           s03_fs_id
   sff_composition_forecast_all   composition × future horizon × technique     s10_stage3_id
-  sff_series_exam                forecast series (the chosen technique)       s03_fs_id
 
 EVERY TEST HAS ITS INTERVAL, built as the forecast builds its band: the error quantiles of the
 technique in the backtest (step 14) × the binomial error with the series' own units due. A test
@@ -35,8 +34,8 @@ Actions (logged as they are done):
   4. sff_series_dynamics                                              check 5
   5. sff_series_backtest and its summary                              checks 6-8
   6. sff_composition_forecast_all                                     check 9
-  7. sff_series_exam: the exam of the chosen technique per series     checks 10-11
-  8. write the audit tables                                           checks 12-20
+  7. the chosen technique against step 19's framework (one way of predicting)  check 10
+  8. write the audit tables                                           checks 11-18
   9. count the checks; stop if any failed
 
 Checks (logged as they are made, numbered, at the level of their status):
@@ -45,13 +44,12 @@ Checks (logged as they are made, numbered, at the level of their status):
    3. every composition and band has exactly one chosen technique, the one of step 14
    4. the support and the rate of every reference, recomputed from its members, are the ones used
    5. one dynamics row per estimable forecast series
-   6. the series of a composition add up to its exam months (units due and renewed)
-   7. without credibility, the series' predictions add up to the composition's prediction
+   6. every composition is the sum of every series in its rate, in every exam month (users and lenders)
+   7. without credibility, every series predicts exactly its composition's rate
    8. every forecast series and band has exactly one chosen technique in its summary
    9. the chosen technique gives the rate step 17 used (rows with no credibility shift)
-   10. the exam of every series adds up to its chosen predictions (counts and units)
-   11. the predictions in the interval reach 80 % in the exam                      (warning only)
-   12-20. the nine tables written and read back
+   10. the chosen technique, applied to every series, gives the framework prediction of step 19
+   11-18. the eight tables written and read back
 
 Output: dict of the audit tables · the tables listed above.
 """
@@ -64,6 +62,7 @@ from config import Config
 from step_11_ladder import credibility_k_detail
 from step_13_dynamics import dynamics_of_one_series
 from step_14_backtest import band_of_horizon
+from prediction import band_quantiles, levels_at_origins, rate_band, shifted_rate
 from techniques import CATALOGUE, inverse_logit, logit, predict_logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PURPOSE_EXAM, PURPOSE_SELECTION,
                          RATE_COLUMN, RATE_FROM_POOL, SERIES_ID_COLUMN, SYNTHETIC_COLUMN, TABLE_COMPOSITION,
@@ -85,10 +84,10 @@ STEP_ACTIONS = ["sff_composition: every id of every stage (checks 1-2)",
                 "sff_series_dynamics (check 5)",
                 "sff_series_backtest and its summary (checks 6-8)",
                 "sff_composition_forecast_all (check 9)",
-                "sff_series_exam: the exam of the chosen technique per series (checks 10-11)",
-                "write the audit tables (checks 12-20)",
+                "the chosen technique against step 19's framework (check 10)",
+                "write the audit tables (checks 11-18)",
                 "count the checks; stop if any failed"]
-STEP_OUTPUT = "nine audit tables joined to the core by fs_id, the stage ids and the credibility reference"
+STEP_OUTPUT = "eight audit tables joined to the core by fs_id, the stage ids and the credibility reference"
 
 UNITS_TOLERANCE = 1e-6
 RATE_TOLERANCE = 1e-9
@@ -102,7 +101,7 @@ STAGES = (0, 1, 2, 3)
 def build_audit_tables(ladder: dict, series_rate: pd.DataFrame, series_estimate: pd.DataFrame,
                        rated_units: pd.DataFrame, pool_series: pd.DataFrame, pool_reference: pd.DataFrame,
                        pool_dynamics: pd.DataFrame, backtest: dict, forecast_rows: pd.DataFrame,
-                       configuration: Config) -> dict:
+                       configuration: Config, series_exam_detail: pd.DataFrame = None) -> dict:
     """The eight audit tables, checked against their sources and written.
 
     INPUT:   the ladder (step 10), series_rate (08), series_estimate (11), rated_units (08), the
@@ -155,32 +154,28 @@ def build_audit_tables(ladder: dict, series_rate: pd.DataFrame, series_estimate:
     summary = series_technique_summary(series_backtest)
     configuration.log_action(STEP_LABEL, 5, f"{len(series_backtest):,} forecast series × exam month × h × technique rows · "
                                             f"{len(summary):,} series × band × technique")
-    check_series_backtest(series_backtest, backtest["predictions"], summary, configuration, check_log)
+    check_series_backtest(series_backtest, backtest["predictions"], summary, ladder["composition_members"], rated_units,
+                          configuration, check_log)
 
     # [6] the future rate of every technique
     forecast_all = composition_forecast_all(pool_series, backtest["decision"], forecast_rows, configuration)
     configuration.log_action(STEP_LABEL, 6, f"{len(forecast_all):,} composition × horizon × technique rates")
     check_forecast_all(forecast_all, forecast_rows, series_estimate, configuration, check_log)
 
-    # [7] the exam of the chosen technique, per forecast series
-    series_exam = series_exam_table(series_backtest, series_rate, groups, pool_reference)
-    tested = series_exam[series_exam["exam_status"] == TECHNIQUE_TESTED]
-    configuration.log_action(STEP_LABEL, 7, f"exam per forecast series: {series_exam['exam_status'].value_counts().to_dict()} · "
-                                            f"{int(tested['exam_in_band'].sum()):,} of {int(tested['exam_predictions'].sum()):,} "
-                                            f"predictions in their interval · WAPE "
-                                            f"{tested['exam_abs_err_units'].sum() / max(tested['exam_real_units'].sum(), 1e-9):.1%}")
-    check_series_exam(series_exam, series_backtest, configuration, check_log)
+    # [7] the chosen technique of every composition, applied to its forecast series, is step 19's framework
+    configuration.log_action(STEP_LABEL, 7, "the chosen technique of every composition against the framework of step 19")
+    check_against_series_exam(series_backtest, series_exam_detail, configuration, check_log)
 
     # [8] the tables
     configuration.log_action(STEP_LABEL, 8, "writing the audit tables")
     tables = dict(composition=composition, composition_techniques=techniques, credibility=credibility,
                   credibility_members=members, series_dynamics=series_dynamics, series_backtest=series_backtest,
-                  series_technique_summary=summary, composition_forecast_all=forecast_all, series_exam=series_exam)
+                  series_technique_summary=summary, composition_forecast_all=forecast_all)
     for name, table_name in (("composition", TABLE_COMPOSITION), ("composition_techniques", TABLE_COMPOSITION_TECHNIQUES),
                              ("credibility", TABLE_CREDIBILITY), ("credibility_members", TABLE_CREDIBILITY_MEMBERS),
                              ("series_dynamics", TABLE_SERIES_DYNAMICS), ("series_backtest", TABLE_SERIES_BACKTEST),
                              ("series_technique_summary", TABLE_SERIES_TECHNIQUE_SUMMARY),
-                             ("composition_forecast_all", TABLE_COMPOSITION_FORECAST_ALL), ("series_exam", TABLE_SERIES_EXAM)):
+                             ("composition_forecast_all", TABLE_COMPOSITION_FORECAST_ALL)):
         configuration.write_table(STEP_LABEL, check_log, tables[name], table_name)
 
     # [9] the count of the checks; stop if anything failed
@@ -423,7 +418,9 @@ def series_backtest_table(predictions: pd.DataFrame, decision: pd.DataFrame, ban
     rate (moved toward the reference by 1 − z, levels known at the origin) × the series' own units due,
     against what the series really renewed."""
     exam = predictions[predictions["proposito"] == PURPOSE_EXAM].copy()
-    exam["origin"] = exam["ultimo_mes_visto"]
+    # the origin is what was known h months before the target (T − h), not the last month the composition
+    # happened to have data: a gap just before the origin must not hide the months its reference did have
+    exam["origin"] = exam["mes_objetivo"] - exam["h"].astype(int)
     series_of = groups[[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN]].merge(
         series_estimate[[SERIES_ID_COLUMN, "z", "credibility_ref_id"]], on=SERIES_ID_COLUMN, how="left")
     rows = exam.merge(series_of, on=COMPOSITION_ID_COLUMN)
@@ -433,20 +430,18 @@ def series_backtest_table(predictions: pd.DataFrame, decision: pd.DataFrame, ban
 
     # the levels known at the origin: the composition's and its reference's
     composition_level = levels_at_origins(pool_series[pool_series[RATE_COLUMN].notna()].rename(columns={"vencen": "_due", "renovadas": "_renewed"}),
-                                          COMPOSITION_ID_COLUMN, rows[[COMPOSITION_ID_COLUMN, "origin"]].drop_duplicates(), configuration)
+                                          COMPOSITION_ID_COLUMN, rows[[COMPOSITION_ID_COLUMN, "origin"]].drop_duplicates(),
+                                          configuration.period_col, "_due", "_renewed")
     reference_history = history.merge(reference_members, on=SERIES_ID_COLUMN).rename(
         columns={configuration.pipeline_units_col: "_due", configuration.renewed_units_col: "_renewed"})
     reference_level = levels_at_origins(reference_history, "credibility_ref_id",
-                                        rows[["credibility_ref_id", "origin"]].dropna().drop_duplicates(), configuration)
+                                        rows[["credibility_ref_id", "origin"]].dropna().drop_duplicates(),
+                                        configuration.period_col, "_due", "_renewed")
     rows = rows.merge(composition_level.rename(columns={"level": "composition_level"}), on=[COMPOSITION_ID_COLUMN, "origin"], how="left")
     rows = rows.merge(reference_level.rename(columns={"level": "reference_level"}), on=["credibility_ref_id", "origin"], how="left")
 
-    shift = np.zeros(len(rows))
-    if configuration.apply_credibility_shift:
-        moves = (rows["z"] < 1) & rows["reference_level"].between(0, 1, inclusive="neither") & rows["composition_level"].between(0, 1, inclusive="neither")
-        shift = np.where(moves, (1 - rows["z"]) * (logit(rows["reference_level"].clip(1e-6, 1 - 1e-6))
-                                                    - logit(rows["composition_level"].clip(1e-6, 1 - 1e-6))), 0.0)
-    rows["pred_rate"] = inverse_logit(logit(rows["tasa_pred"]) + shift)
+    rows["pred_rate"], shift = shifted_rate(rows["tasa_pred"], rows["z"], rows["reference_level"], rows["composition_level"],
+                                            configuration.apply_credibility_shift)
     rows["real_rate"] = rows["real_units"] / rows["due_units"]
     rows["pred_units"] = rows["pred_rate"] * rows["due_units"]
     rows["err_units"] = rows["pred_units"] - rows["real_units"]
@@ -455,11 +450,8 @@ def series_backtest_table(predictions: pd.DataFrame, decision: pd.DataFrame, ban
     rows["err_norm"] = rows["err_pp"] / rows["se_binom_pp"].where(rows["se_binom_pp"] > 0)
     # the interval of the test, as the forecast builds its band: the error quantiles of the technique at that
     # horizon (step 14) × the binomial error of the rate with the series' own units due
-    quantiles = bands.set_index(["tecnica", "h"])[["q_low_norm", "q_high_norm"]]
-    rows = rows.join(quantiles, on=["tecnica", "h"])
-    se_rate = np.sqrt(rows["pred_rate"] * (1 - rows["pred_rate"]) / rows["due_units"].clip(lower=1))
-    rows["band_low_rate"] = np.clip(rows["pred_rate"] + np.minimum(rows["q_low_norm"], 0) * se_rate, 0, 1)
-    rows["band_high_rate"] = np.clip(rows["pred_rate"] + np.maximum(rows["q_high_norm"], 0) * se_rate, 0, 1)
+    q_low, q_high = band_quantiles(bands, rows["tecnica"], rows["h"], configuration)
+    rows["band_low_rate"], rows["band_high_rate"] = rate_band(rows["pred_rate"], rows["due_units"], q_low, q_high)
     rows["band_low_units"] = rows["band_low_rate"] * rows["due_units"]
     rows["band_high_units"] = rows["band_high_rate"] * rows["due_units"]
     rows["in_band"] = ((rows["real_rate"] >= rows["band_low_rate"] - 1e-12)
@@ -468,23 +460,11 @@ def series_backtest_table(predictions: pd.DataFrame, decision: pd.DataFrame, ban
     rows["is_chosen"] = (pd.Series(list(zip(rows[COMPOSITION_ID_COLUMN], rows["tramo_h"])), index=rows.index).map(chosen)
                          == rows["tecnica"]).astype(int)
     rows["shifted_by_credibility"] = (np.abs(shift) > 0).astype(int)
+    rows["credibility_shift_logit"] = shift
     return rows[[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN, "mes_objetivo", "h", "tramo_h", "origin", "tecnica", "is_chosen",
                  "shifted_by_credibility", "tasa_pred", "pred_rate", "real_rate", "due_units", "pred_units", "real_units",
                  "err_units", "err_pp", "se_binom_pp", "err_norm", "band_low_rate", "band_high_rate", "band_low_units",
                  "band_high_units", "in_band"]]
-
-
-def levels_at_origins(history: pd.DataFrame, key: str, wanted: pd.DataFrame, configuration: Config) -> pd.DataFrame:
-    """The rate (Σ renewed / Σ due) of every key with what was known at every origin it needs."""
-    rows = []
-    history_of_key = dict(tuple(history.groupby(key)))                              # one pass over the history
-    for key_value, origins in wanted.groupby(key)["origin"]:
-        own = history_of_key.get(key_value, history.iloc[0:0])
-        for origin in origins:
-            known = own[own[configuration.period_col] <= origin]
-            due = known["_due"].sum()
-            rows.append({key: key_value, "origin": origin, "level": known["_renewed"].sum() / due if due > 0 else np.nan})
-    return pd.DataFrame(rows, columns=[key, "origin", "level"])
 
 
 def series_technique_summary(series_backtest: pd.DataFrame) -> pd.DataFrame:
@@ -504,23 +484,26 @@ def series_technique_summary(series_backtest: pd.DataFrame) -> pd.DataFrame:
 
 
 def check_series_backtest(series_backtest: pd.DataFrame, predictions: pd.DataFrame, summary: pd.DataFrame,
-                          configuration: Config, check_log: list) -> None:
-    """Checks 6 to 8: the series add up to their composition; one chosen technique per series and band."""
-    exam = predictions[predictions["proposito"] == PURPOSE_EXAM]
-    keys = [COMPOSITION_ID_COLUMN, "mes_objetivo", "h", "tecnica"]
-    summed = series_backtest.groupby(keys)[["due_units", "real_units", "pred_units"]].sum()
-    shifted = series_backtest.groupby(keys)["shifted_by_credibility"].max()
-    compared = exam.set_index(keys)[["vencen_real", "tasa_real", "tasa_pred"]].join(summed, how="inner").join(shifted)
-    adds_up = (((compared["due_units"] - compared["vencen_real"]).abs() <= UNITS_TOLERANCE)
-               & ((compared["real_units"] - compared["tasa_real"] * compared["vencen_real"]).abs() <= UNITS_TOLERANCE))
-    configuration.log_check(STEP_LABEL, check_log, "the series of a composition add up to its exam months (units due and renewed)",
-                            bool(adds_up.all()) and len(compared) == len(exam),
-                            failure_detail=f"{int((~adds_up).sum())} composition × month × h × technique differ · "
-                                           f"{len(compared)} of {len(exam)} exam predictions covered",
-                            context=f"{len(compared):,} composition × month × h × technique")
-    unshifted = compared[compared["shifted_by_credibility"] == 0]
-    same_prediction = ((unshifted["pred_units"] - unshifted["tasa_pred"] * unshifted["vencen_real"]).abs() <= UNITS_TOLERANCE)
-    configuration.log_check(STEP_LABEL, check_log, "without credibility, the series' predictions add up to the composition's prediction",
+                          members: pd.DataFrame, rated_units: pd.DataFrame, configuration: Config, check_log: list) -> None:
+    """Checks 6 to 8: every composition is the sum of every series in its rate (those that use it and those
+    that only lend their history); without credibility a series predicts its composition's rate; one chosen
+    technique per series and band."""
+    due, renewed, period = configuration.pipeline_units_col, configuration.renewed_units_col, configuration.period_col
+    exam = predictions[predictions["proposito"] == PURPOSE_EXAM].drop_duplicates([COMPOSITION_ID_COLUMN, "mes_objetivo"])
+    real = rated_units[(rated_units[SYNTHETIC_COLUMN] == 0) & (rated_units[due] > 0)]
+    summed = (real.merge(members[[COMPOSITION_ID_COLUMN, SERIES_ID_COLUMN]], on=SERIES_ID_COLUMN)
+              .groupby([COMPOSITION_ID_COLUMN, period])[[due, renewed]].sum())
+    compared = exam.set_index([COMPOSITION_ID_COLUMN, "mes_objetivo"])[["vencen_real", "tasa_real"]].join(
+        summed.rename_axis([COMPOSITION_ID_COLUMN, "mes_objetivo"]), how="left")
+    adds_up = (((compared[due] - compared["vencen_real"]).abs() <= UNITS_TOLERANCE)
+               & ((compared[renewed] - compared["tasa_real"] * compared["vencen_real"]).abs() <= UNITS_TOLERANCE))
+    configuration.log_check(STEP_LABEL, check_log, "every composition is the sum of every series in its rate, in every exam month "
+                            "(the ones that use it and the ones that lend their history)", bool(adds_up.all()),
+                            failure_detail=f"{int((~adds_up).sum())} composition × month differ",
+                            context=f"{len(compared):,} composition × exam month")
+    unshifted = series_backtest[series_backtest["shifted_by_credibility"] == 0]
+    same_prediction = (unshifted["pred_rate"] - unshifted["tasa_pred"]).abs() <= 1e-12
+    configuration.log_check(STEP_LABEL, check_log, "without credibility, every series predicts exactly its composition's rate",
                             bool(same_prediction.all()),
                             failure_detail=f"{int((~same_prediction).sum())} differ", context=f"{len(unshifted):,} checked")
     per_series_band = summary.groupby([SERIES_ID_COLUMN, "tramo_h"])["is_chosen"].sum()
@@ -530,45 +513,23 @@ def check_series_backtest(series_backtest: pd.DataFrame, predictions: pd.DataFra
                             context=f"{len(per_series_band):,} series × band")
 
 
-def series_exam_table(series_backtest: pd.DataFrame, series_rate: pd.DataFrame, groups: pd.DataFrame,
-                      pool_reference: pd.DataFrame) -> pd.DataFrame:
-    """Per forecast series, the exam of its CHOSEN technique (every exam month and horizon): how many
-    predictions, how many in their interval, units predicted and real, the error; and, when it has no
-    exam, why (exam_status)."""
-    chosen = series_backtest[series_backtest["is_chosen"] == 1].assign(abs_err_units=lambda frame: frame["err_units"].abs(),
-                                                                         abs_err_pp=lambda frame: frame["err_pp"].abs())
-    grouped = chosen.groupby(SERIES_ID_COLUMN)
-    exam = pd.DataFrame({"exam_predictions": grouped.size(), "exam_in_band": grouped["in_band"].sum(),
-                         "exam_pred_units": grouped["pred_units"].sum(), "exam_real_units": grouped["real_units"].sum(),
-                         "exam_abs_err_units": grouped["abs_err_units"].sum(), "exam_mae_pp": grouped["abs_err_pp"].mean(),
-                         "exam_bias_pp": grouped["err_pp"].mean()})
-    exam["exam_wape"] = exam["exam_abs_err_units"] / exam["exam_real_units"].where(exam["exam_real_units"] > 0)
-    exam["exam_coverage"] = exam["exam_in_band"] / exam["exam_predictions"]
-    table = series_rate[[SERIES_ID_COLUMN]].join(exam, on=SERIES_ID_COLUMN)
-    composition_of = groups.set_index(SERIES_ID_COLUMN)[COMPOSITION_ID_COLUMN]
-    gate_of = pool_reference.set_index(COMPOSITION_ID_COLUMN)["gate"]
-    gate = table[SERIES_ID_COLUMN].map(composition_of).map(gate_of)
-    table["exam_status"] = np.select(
-        [table["exam_predictions"].notna(), table[SERIES_ID_COLUMN].map(composition_of).isna(), gate != GATE_LEVEL],
-        [TECHNIQUE_TESTED, "not_estimable", TECHNIQUE_COMPOSITION_BELOW_FLOOR], default="no_exam_months")
-    return table
-
-
-def check_series_exam(series_exam: pd.DataFrame, series_backtest: pd.DataFrame, configuration: Config, check_log: list) -> None:
-    """Checks 10 and 11: the summary adds up to the chosen predictions; the interval keeps its promise."""
-    chosen = series_backtest[series_backtest["is_chosen"] == 1]
-    adds_up = (int(series_exam["exam_predictions"].sum()) == len(chosen)
-               and int(series_exam["exam_in_band"].sum()) == int(chosen["in_band"].sum())
-               and abs(series_exam["exam_pred_units"].sum() - chosen["pred_units"].sum()) <= UNITS_TOLERANCE
-               and abs(series_exam["exam_real_units"].sum() - chosen["real_units"].sum()) <= UNITS_TOLERANCE)
-    configuration.log_check(STEP_LABEL, check_log, "the exam of every series adds up to its chosen predictions (counts and units)",
-                            adds_up, failure_detail="the summary per series does not add up to sff_series_backtest",
-                            context=f"{len(chosen):,} chosen predictions")
-    coverage = chosen["in_band"].mean() if len(chosen) else np.nan
-    configuration.log_check(STEP_LABEL, check_log, f"the predictions in their interval reach {COVERAGE_WARNING:.0%} in the exam",
-                            bool(np.isnan(coverage) or coverage >= COVERAGE_WARNING),
-                            failure_detail=f"only {coverage:.0%} of the predictions in their interval",
-                            context=f"{coverage:.0%} in the interval" if np.isfinite(coverage) else "no prediction", blocking=False)
+def check_against_series_exam(series_backtest: pd.DataFrame, series_exam_detail, configuration: Config,
+                               check_log: list) -> None:
+    """Check 10: the backtest of step 14 (the chosen technique) applied to the series gives the framework
+    prediction of step 19, computed apart with prediction.py: one way of predicting, not two."""
+    if series_exam_detail is None:
+        configuration.log_not_evaluated(STEP_LABEL, check_log, "the chosen technique gives the framework prediction of step 19",
+                                        "step 19 has not run")
+        return
+    chosen = series_backtest[series_backtest["is_chosen"] == 1][[SERIES_ID_COLUMN, "mes_objetivo", "h", "pred_rate"]]
+    framework = series_exam_detail[series_exam_detail["method"] == "framework"].rename(columns={configuration.period_col: "mes_objetivo"})
+    compared = chosen.merge(framework[[SERIES_ID_COLUMN, "mes_objetivo", "h", "pred_rate"]], on=[SERIES_ID_COLUMN, "mes_objetivo", "h"],
+                            suffixes=("_audit", "_exam"))
+    differs = (compared["pred_rate_audit"] - compared["pred_rate_exam"]).abs() > 1e-9
+    configuration.log_check(STEP_LABEL, check_log, "the chosen technique, applied to every series, gives the framework prediction of step 19",
+                            len(compared) == len(chosen) and not bool(differs.any()),
+                            failure_detail=f"{int(differs.sum())} of {len(compared)} predictions differ · {len(chosen) - len(compared)} not found",
+                            context=f"{len(compared):,} predictions compared")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════

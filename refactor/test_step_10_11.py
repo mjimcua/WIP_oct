@@ -1,8 +1,9 @@
 """
-test_step_10_11.py — Steps 10 and 11 on the synthetic: every pass of the ladder is a partition
-(the totals add up, the groups get fewer and bigger), a closed group keeps its id, the sign is
-never mixed, every final group lends one rate, and the rate blends with the reference by
-credibility.
+test_step_10_11.py — Steps 10 and 11 on the synthetic: the mechanical rule of the ladder (every
+series grouped by the same pattern at every pass; each uses the first pass whose group reaches the
+floor; a big series keeps its own id but lends its history), every pass is a partition of the ids,
+the sign is never mixed, every merge is recorded with its error alone and merged, stage 3 merges at
+most collapse_passes dims, and the rate blends with the reference by credibility.
 
     python test_step_10_11.py
 """
@@ -40,7 +41,7 @@ def test_the_passes() -> None:
                                                                                  decision, configuration)))
     ladder = frames["ladder"]
     steps, summary, groups = ladder["steps"], ladder["summary"], ladder["groups"]
-    check("7 checks: 7 ok" in console, "the 7 checks of step 10 pass")
+    check("9 checks: 9 ok" in console, "the 9 checks of step 10 pass")
     check(list(summary["step_name"][:2]) == ["itself", "sign"] and summary["step_name"].iloc[2].startswith("extra"),
           "the passes in order: itself → sign → extras → mandatory dims")
     check(summary["units_due"].nunique() == 1, "every pass is a partition: the units due add up to the same total")
@@ -60,12 +61,39 @@ def test_the_passes() -> None:
     mixed = steps[steps["fs_id"] == "EU|B|1|0|0|1|web"]
     check(mixed["group_id"].nunique() == 1, "a mixed series is never merged")
 
+    tele = groups.set_index("fs_id").loc["NA|A|0|0|0|0|tele"]
+    check(tele["composition_id"] == "NA|A|SIG=neutro|*" and tele["group_series"] == 2 and tele["composition_users"] == 1,
+          "the mechanical rule: NA|A|tele joins its sibling NA|A|web when the channel is removed (2 series in the rate, 1 uses it)")
+    members = ladder["composition_members"]
+    web_role = members[(members["composition_id"] == "NA|A|SIG=neutro|*") & (members["fs_id"] == "NA|A|0|0|0|0|web")]["role"]
+    check(list(web_role) == ["lends"] and groups.set_index("fs_id").loc["NA|A|0|0|0|0|web", "composition_id"] == "NA|A|0|0|0|0|web",
+          "NA|A|web predicts alone (own id) and lends its history to NA|A|tele's composition")
+    merges = ladder["merges"]
+    check(len(merges) > 0 and (merges["error_merged_pp"] < merges["error_alone_pp"]).all()
+          and {"bias_pp", "error_alone_pp", "error_merged_pp", "improves"} <= set(merges.columns),
+          "every merge is recorded with its bias and its error alone and merged; in the synthetic every merge improves")
+
     with_reference = groups.dropna(subset=["credibility_ref_id"])
     check((with_reference["ref_series"] > with_reference["group_series"]).all()
           and (with_reference["group_support"] < configuration.own_rate_floor).all(),
           "only groups below the own-rate floor take a reference, always wider than the group")
     closed_big = groups[groups["group_support"] >= configuration.own_rate_floor]
     check(closed_big["credibility_ref_id"].isna().all(), "a group with own precision takes no reference")
+
+
+def test_the_collapse_limit() -> None:
+    print("A2 · stage 3 merges at most collapse_passes dims; the later passes only give a reference")
+    rated_units, series_rate, series_lookup, decision, configuration = inputs_of_the_ladder()
+    configuration.collapse_passes = 0
+    frames = {}
+    console_of(lambda: frames.setdefault("ladder", build_ladder_groups(rated_units, series_rate, series_lookup, decision, configuration)))
+    steps = frames["ladder"]["steps"]
+    check(not steps["step_name"].str.startswith("without").any(),
+          "with collapse_passes = 0 no mandatory dim is merged: the passes stop at the extras")
+    groups = frames["ladder"]["groups"]
+    references = groups.dropna(subset=["credibility_ref_id"])
+    check(len(references) > 0 and (references["credibility_ref_step"] > references["final_step"]).all(),
+          "a composition below the own-rate floor can still take its reference from a later (non-merging) pass")
 
 
 def test_the_rate() -> None:
@@ -88,7 +116,7 @@ def test_the_rate() -> None:
     check(abs(row["z"] - round(expected_z, 3)) < 1e-9
           and abs(row["tasa_estimada"] - (expected_z * row["group_rate"] + (1 - expected_z) * row["ref_rate"])) < 1e-9,
           "z = n / (n + k) with the group's support; rate = z · group + (1 − z) · reference")
-    rates_per_group = estimate.dropna(subset=["tasa_estimada"]).groupby("final_group_id")["tasa_estimada"].nunique()
+    rates_per_group = estimate.dropna(subset=["tasa_estimada"]).groupby("composition_id")["tasa_estimada"].nunique()
     check((rates_per_group == 1).all(), "every series of a group has the same rate: the group lends it")
     check((estimate["se_prediccion_pp"].dropna() >= estimate["se_estimacion_pp"].dropna() - 1e-9).all()
           and np.allclose(binomial_se_pp([0.5], [100]), [5.0]),
@@ -97,5 +125,6 @@ def test_the_rate() -> None:
 
 if __name__ == "__main__":
     test_the_passes()
+    test_the_collapse_limit()
     test_the_rate()
     finish()

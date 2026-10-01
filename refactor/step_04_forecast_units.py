@@ -167,7 +167,7 @@ def log_units_report(forecast_units: pd.DataFrame, configuration: Config) -> Non
     per_role_rows = []
     for role in ROLES_IN_ORDER:
         role_units = forecast_units[forecast_units[CALENDAR_ROLE_COLUMN] == role]
-        per_role_rows.append({"rol": role, "unidades": len(role_units), "series": role_units[SERIES_ID_COLUMN].nunique(),
+        per_role_rows.append({CALENDAR_ROLE_COLUMN: role, "unidades": len(role_units), "series": role_units[SERIES_ID_COLUMN].nunique(),
                               "unidades_vencen": role_units[configuration.pipeline_units_col].sum(),
                               "usd_vence": role_units[configuration.pipeline_usd_col].sum()})
     configuration.show_table(pd.DataFrame(per_role_rows))

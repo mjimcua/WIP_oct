@@ -69,7 +69,7 @@ import pandas as pd
 
 from config import Config
 from techniques import CATALOGUE, eligible_techniques, inverse_logit, logit, predict_logit, technique_table
-from vocabulario import (CHALLENGER_ORIGIN, CHAMPION_ORIGIN, ESTIMATION_ID_COLUMN, GATE_LEVEL, PURPOSE_EXAM,
+from vocabulario import (CHALLENGER_ORIGIN, CHAMPION_ORIGIN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PURPOSE_EXAM,
                          PURPOSE_SELECTION, RATE_COLUMN, TABLE_BACKTEST_PREDICTIONS, TABLE_ERROR_BANDS,
                          TABLE_EXAM_BY_POOL, TABLE_EXAM_TOTAL, TABLE_TECHNIQUES, TABLE_TECHNIQUE_DECISION)
 
@@ -96,7 +96,7 @@ STEP_OUTPUT = ("predictions (id × target × horizon × technique) · the chosen
 PERCENTAGE_POINTS = 100
 MIN_EXAM_COVERAGE = 0.80
 SUPPORT_ORIGIN = "sin_soporte"      # an id below the floor: not judged, it takes the challenger
-PREDICTION_COLUMNS = [ESTIMATION_ID_COLUMN, "proposito", "mes_objetivo", "h", "origen", "ultimo_mes_visto", "tecnica",
+PREDICTION_COLUMNS = [COMPOSITION_ID_COLUMN, "proposito", "mes_objetivo", "h", "origen", "ultimo_mes_visto", "tecnica",
                       "tasa_pred", "tasa_real", "vencen_real", "err_pp", "se_binom_pp", "err_norm"]
 
 
@@ -118,10 +118,10 @@ def run_backtest(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, config
     log_how_the_test_works(selection_months, exam_months, pool_reference, configuration)
 
     # [2] the predictions
-    judged_ids = set(pool_reference.loc[pool_reference["gate"] == GATE_LEVEL, ESTIMATION_ID_COLUMN])
+    judged_ids = set(pool_reference.loc[pool_reference["gate"] == GATE_LEVEL, COMPOSITION_ID_COLUMN])
     predictions = predict_every_target(pool_series, judged_ids, selection_months, exam_months, configuration)
     predictions["tramo_h"] = predictions["h"].map(lambda h: band_of_horizon(int(h), configuration.horizon_bands))
-    configuration.log_action(STEP_LABEL, 2, f"{len(predictions):,} predictions: {predictions[ESTIMATION_ID_COLUMN].nunique():,} "
+    configuration.log_action(STEP_LABEL, 2, f"{len(predictions):,} predictions: {predictions[COMPOSITION_ID_COLUMN].nunique():,} "
                                             f"ids × {predictions['mes_objetivo'].nunique()} target months × "
                                             f"{len(configuration.backtest_horizons)} horizons × up to {len(CATALOGUE)} techniques "
                                             f"(each where its history allows)")
@@ -137,7 +137,7 @@ def run_backtest(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, config
 
     # [5] the exam: per id and for the total
     exam_by_pool, exam_total, exam_rows = exam_precision(predictions, decision, bands, configuration)
-    configuration.log_action(STEP_LABEL, 5, f"exam measured on {exam_by_pool[ESTIMATION_ID_COLUMN].nunique():,} ids and "
+    configuration.log_action(STEP_LABEL, 5, f"exam measured on {exam_by_pool[COMPOSITION_ID_COLUMN].nunique():,} ids and "
                                             f"{exam_total['mes_objetivo'].nunique()} months")
 
     # [6] the checks
@@ -218,10 +218,10 @@ def predict_every_target(pool_series: pd.DataFrame, judged_ids: set, selection_m
     period_column = configuration.period_col
     purpose_of = {month.ordinal: PURPOSE_SELECTION for month in selection_months}
     purpose_of.update({month.ordinal: PURPOSE_EXAM for month in exam_months})
-    judged_series = pool_series[pool_series[ESTIMATION_ID_COLUMN].isin(judged_ids) & pool_series[RATE_COLUMN].notna()
+    judged_series = pool_series[pool_series[COMPOSITION_ID_COLUMN].isin(judged_ids) & pool_series[RATE_COLUMN].notna()
                                 & (pool_series["vencen"] > 0)]
     rows = []
-    for estimation_id, monthly in judged_series.groupby(ESTIMATION_ID_COLUMN, sort=False):
+    for estimation_id, monthly in judged_series.groupby(COMPOSITION_ID_COLUMN, sort=False):
         monthly = monthly.sort_values(period_column)
         month_ordinals = np.array([month.ordinal for month in monthly[period_column]])
         calendar_months = np.array([month.month for month in monthly[period_column]])
@@ -269,11 +269,11 @@ def choose_techniques(predictions: pd.DataFrame, pool_reference: pd.DataFrame, c
     catalogue_order = {technique_id: position for position, technique_id in enumerate(CATALOGUE)}
     selection = predictions[predictions["proposito"] == PURPOSE_SELECTION].assign(
         abs_norm=lambda frame: frame["err_norm"].abs(), abs_pp=lambda frame: frame["err_pp"].abs())
-    scores = (selection.groupby([ESTIMATION_ID_COLUMN, "tramo_h", "tecnica"])
+    scores = (selection.groupby([COMPOSITION_ID_COLUMN, "tramo_h", "tecnica"])
               .agg(err_norm_medio=("abs_norm", "mean"), err_pp_medio=("abs_pp", "mean"), n_predicciones=("abs_norm", "size"))
               .reset_index())
     decision_rows = []
-    for (estimation_id, band_name), block in scores.groupby([ESTIMATION_ID_COLUMN, "tramo_h"]):
+    for (estimation_id, band_name), block in scores.groupby([COMPOSITION_ID_COLUMN, "tramo_h"]):
         block = block.set_index("tecnica")
         challenger_score = block.loc[challenger, "err_norm_medio"] if challenger in block.index else np.inf
         margin = float(configuration.challenger_margin_by_band.get(band_name, 0.0))
@@ -286,7 +286,7 @@ def choose_techniques(predictions: pd.DataFrame, pool_reference: pd.DataFrame, c
                 chosen, origin = best, CHAMPION_ORIGIN
         chosen_row = block.loc[chosen] if chosen in block.index else pd.Series(dict(err_norm_medio=np.nan, err_pp_medio=np.nan,
                                                                                     n_predicciones=0))
-        decision_rows.append({ESTIMATION_ID_COLUMN: estimation_id, "tramo_h": band_name, "tecnica": chosen,
+        decision_rows.append({COMPOSITION_ID_COLUMN: estimation_id, "tramo_h": band_name, "tecnica": chosen,
                               "tecnica_origen": origin, "err_norm_seleccion": chosen_row["err_norm_medio"],
                               "err_pp_seleccion": chosen_row["err_pp_medio"], "n_predicciones": int(chosen_row["n_predicciones"]),
                               "retador_err_norm_seleccion": challenger_score})
@@ -294,9 +294,9 @@ def choose_techniques(predictions: pd.DataFrame, pool_reference: pd.DataFrame, c
 
     # every id and band gets a decision: the unjudged ones (and a judged id with no selection
     # month in a band) take the challenger
-    all_pairs = pd.MultiIndex.from_product([pool_reference[ESTIMATION_ID_COLUMN], list(configuration.horizon_bands)],
-                                           names=[ESTIMATION_ID_COLUMN, "tramo_h"]).to_frame(index=False)
-    decision = all_pairs.merge(decision, on=[ESTIMATION_ID_COLUMN, "tramo_h"], how="left")
+    all_pairs = pd.MultiIndex.from_product([pool_reference[COMPOSITION_ID_COLUMN], list(configuration.horizon_bands)],
+                                           names=[COMPOSITION_ID_COLUMN, "tramo_h"]).to_frame(index=False)
+    decision = all_pairs.merge(decision, on=[COMPOSITION_ID_COLUMN, "tramo_h"], how="left")
     unjudged = decision["tecnica"].isna()
     decision.loc[unjudged, "tecnica"] = challenger
     decision.loc[unjudged, "tecnica_origen"] = SUPPORT_ORIGIN
@@ -318,7 +318,7 @@ def exam_precision(predictions: pd.DataFrame, decision: pd.DataFrame, bands: pd.
     """The chosen technique and the challenger in the exam months: per id and for the total."""
     challenger = configuration.challenger_technique
     exam = predictions[predictions["proposito"] == PURPOSE_EXAM]
-    chosen_rows = exam.merge(decision[[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica"]], on=[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica"])
+    chosen_rows = exam.merge(decision[[COMPOSITION_ID_COLUMN, "tramo_h", "tecnica"]], on=[COMPOSITION_ID_COLUMN, "tramo_h", "tecnica"])
     chosen_rows = chosen_rows.merge(bands[["tecnica", "h", "q_low_norm", "q_high_norm"]], on=["tecnica", "h"], how="left")
     chosen_rows["dentro_banda"] = ((chosen_rows["err_norm"] >= chosen_rows["q_low_norm"])
                                    & (chosen_rows["err_norm"] <= chosen_rows["q_high_norm"])).astype(int)
@@ -326,15 +326,15 @@ def exam_precision(predictions: pd.DataFrame, decision: pd.DataFrame, bands: pd.
 
     def summary(rows: pd.DataFrame, prefix: str) -> pd.DataFrame:
         return (rows.assign(abs_pp=rows["err_pp"].abs(), abs_norm=rows["err_norm"].abs())
-                .groupby([ESTIMATION_ID_COLUMN, "tramo_h"])
+                .groupby([COMPOSITION_ID_COLUMN, "tramo_h"])
                 .agg(**{f"{prefix}_err_pp_medio": ("abs_pp", "mean"), f"{prefix}_sesgo_pp": ("err_pp", "mean"),
                         f"{prefix}_err_norm_medio": ("abs_norm", "mean")}))
 
     exam_by_pool = summary(chosen_rows, "elegida").join(summary(challenger_rows, "retador"), how="left").reset_index()
-    exam_by_pool = exam_by_pool.merge(decision[[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]],
-                                      on=[ESTIMATION_ID_COLUMN, "tramo_h"], how="left")
+    exam_by_pool = exam_by_pool.merge(decision[[COMPOSITION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]],
+                                      on=[COMPOSITION_ID_COLUMN, "tramo_h"], how="left")
     exam_by_pool["mejora_pp"] = exam_by_pool["retador_err_pp_medio"] - exam_by_pool["elegida_err_pp_medio"]
-    exam_by_pool["dentro_banda"] = chosen_rows.groupby([ESTIMATION_ID_COLUMN, "tramo_h"])["dentro_banda"].mean().to_numpy()
+    exam_by_pool["dentro_banda"] = chosen_rows.groupby([COMPOSITION_ID_COLUMN, "tramo_h"])["dentro_banda"].mean().to_numpy()
 
     # the TOTAL: Σ predicted renewals vs Σ real renewals of every judged id, per exam month and horizon
     def total_of(rows: pd.DataFrame, prefix: str) -> pd.DataFrame:
@@ -367,7 +367,7 @@ def check_backtest(predictions: pd.DataFrame, decision: pd.DataFrame, pool_refer
                             context=f"{len(pool_reference):,} ids × {len(configuration.horizon_bands)} bands")
 
     # [3] the challenger is always there to compare with
-    targets = predictions.groupby([ESTIMATION_ID_COLUMN, "mes_objetivo", "h"])["tecnica"].apply(set)
+    targets = predictions.groupby([COMPOSITION_ID_COLUMN, "mes_objetivo", "h"])["tecnica"].apply(set)
     without_challenger = int(sum(configuration.challenger_technique not in techniques for techniques in targets))
     configuration.log_check(STEP_LABEL, check_log, "the challenger was predicted wherever another technique was",
                             without_challenger == 0,
@@ -378,7 +378,7 @@ def check_backtest(predictions: pd.DataFrame, decision: pd.DataFrame, pool_refer
     configuration.log_check(STEP_LABEL, check_log, "the ranking compares the techniques on common targets",
                             len(common) > 0,
                             failure_detail="no target where every technique competed: the ranking would mix different targets",
-                            context=f"{len(common):,} of {predictions.groupby([ESTIMATION_ID_COLUMN, 'mes_objetivo', 'h']).ngroups:,} "
+                            context=f"{len(common):,} of {predictions.groupby([COMPOSITION_ID_COLUMN, 'mes_objetivo', 'h']).ngroups:,} "
                                     f"targets have every technique; the others lack a history of 24 months")
 
     # [5] the band holds what it promises in the exam
@@ -394,8 +394,8 @@ def check_backtest(predictions: pd.DataFrame, decision: pd.DataFrame, pool_refer
 
 def common_targets(predictions: pd.DataFrame) -> pd.DataFrame:
     """The (id, target, horizon) where every technique of the catalogue competed."""
-    techniques_per_target = predictions.groupby([ESTIMATION_ID_COLUMN, "mes_objetivo", "h"])["tecnica"].nunique()
-    return techniques_per_target[techniques_per_target == len(CATALOGUE)].reset_index()[[ESTIMATION_ID_COLUMN, "mes_objetivo", "h"]]
+    techniques_per_target = predictions.groupby([COMPOSITION_ID_COLUMN, "mes_objetivo", "h"])["tecnica"].nunique()
+    return techniques_per_target[techniques_per_target == len(CATALOGUE)].reset_index()[[COMPOSITION_ID_COLUMN, "mes_objetivo", "h"]]
 
 
 def log_backtest_report(predictions: pd.DataFrame, decision: pd.DataFrame, exam_by_pool: pd.DataFrame,
@@ -405,7 +405,7 @@ def log_backtest_report(predictions: pd.DataFrame, decision: pd.DataFrame, exam_
                                             "as close as chance allows; same targets for every technique):")
     selection = predictions[predictions["proposito"] == PURPOSE_SELECTION]
     common = common_targets(predictions)
-    selection = selection.merge(common, on=[ESTIMATION_ID_COLUMN, "mes_objetivo", "h"])
+    selection = selection.merge(common, on=[COMPOSITION_ID_COLUMN, "mes_objetivo", "h"])
     ranking = (selection.assign(abs_norm=selection["err_norm"].abs(), abs_pp=selection["err_pp"].abs())
                .groupby(["tramo_h", "tecnica"]).agg(err_norm_medio=("abs_norm", "mean"), err_pp_medio=("abs_pp", "mean"),
                                                     predicciones=("abs_norm", "size"))
@@ -413,15 +413,15 @@ def log_backtest_report(predictions: pd.DataFrame, decision: pd.DataFrame, exam_
     configuration.show_table(ranking)
 
     configuration.logger.doc(f"[{STEP_LABEL}] the chosen technique per band (ids and the money their series predict):")
-    chosen_money = decision.merge(pool_reference[[ESTIMATION_ID_COLUMN, "usd_por_predecir"]], on=ESTIMATION_ID_COLUMN)
+    chosen_money = decision.merge(pool_reference[[COMPOSITION_ID_COLUMN, "usd_por_predecir"]], on=COMPOSITION_ID_COLUMN)
     configuration.show_table(chosen_money.groupby(["tramo_h", "tecnica", "tecnica_origen"])
-                             .agg(ids=(ESTIMATION_ID_COLUMN, "size"), usd_por_predecir=("usd_por_predecir", "sum"))
+                             .agg(ids=(COMPOSITION_ID_COLUMN, "size"), usd_por_predecir=("usd_por_predecir", "sum"))
                              .reset_index().sort_values(["tramo_h", "usd_por_predecir"], ascending=[True, False]))
 
     configuration.logger.doc(f"[{STEP_LABEL}] precision in the EXAM, per band (mean over the judged ids; err in pp of rate; "
                              f"mejora = challenger's error − chosen's error):")
     configuration.show_table(exam_by_pool.groupby("tramo_h")
-                             .agg(ids=(ESTIMATION_ID_COLUMN, "size"), elegida_err_pp=("elegida_err_pp_medio", "mean"),
+                             .agg(ids=(COMPOSITION_ID_COLUMN, "size"), elegida_err_pp=("elegida_err_pp_medio", "mean"),
                                   retador_err_pp=("retador_err_pp_medio", "mean"), mejora_pp=("mejora_pp", "mean"),
                                   elegida_sesgo_pp=("elegida_sesgo_pp", "mean"), dentro_banda=("dentro_banda", "mean"))
                              .reset_index())

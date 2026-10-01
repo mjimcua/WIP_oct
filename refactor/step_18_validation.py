@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_REAL,
+from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_REAL,
                          RATE_FROM_POOL, ROLE_PROJECTION, S0_PIPELINE_USD_COLUMN, SERIES_ID_COLUMN, TABLE_VALIDATION,
                          TRUTH_ROLES)
 
@@ -89,8 +89,8 @@ def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> p
     configuration.log_check(STEP_LABEL, check_log, "every series with money to predict has a rate and a risk level",
                             uncovered.empty and set(with_money[SERIES_ID_COLUMN]) <= forecast_series,
                             failure_detail=f"{len(uncovered)} series without level", context=f"{len(with_money):,} series")
-    pooled_ids = set(results["pool_reference"][ESTIMATION_ID_COLUMN])
-    should_pool = forecast[ESTIMATION_ID_COLUMN].isin(pooled_ids)
+    pooled_ids = set(results["pool_reference"][COMPOSITION_ID_COLUMN])
+    should_pool = forecast[COMPOSITION_ID_COLUMN].isin(pooled_ids)
     configuration.log_check(STEP_LABEL, check_log, "every future row of a series with an estimation id takes its rate from the pool",
                             bool((forecast.loc[should_pool, "origen_tasa"] == RATE_FROM_POOL).all()),
                             failure_detail="rows with a pool that took another rate",

@@ -78,6 +78,7 @@ import pandas as pd
 
 from config import ACTIVE_FLAG_VALUES, Config, discount_bucket_labels, is_one_year, join_columns, parse_month
 from step_14_backtest import band_of_horizon
+from prediction import band_quantiles, predict_composition, rate_band, shifted_rate
 from techniques import inverse_logit, logit, predict_logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PATH_CONTRACT, PATH_STATISTICAL,
                          PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_COLUMN,
@@ -380,30 +381,22 @@ def with_ids(rows: pd.DataFrame, configuration: Config) -> pd.DataFrame:
 # THE RATE
 # ═══════════════════════════════════════════════════════════════════════════════════
 
-def judged_horizon(horizon: int, judged: list) -> int:
-    """The judged horizon whose band a horizon takes: itself, the next one above, or the last."""
-    above = [judged_h for judged_h in sorted(judged) if judged_h >= horizon]
-    return above[0] if above else max(judged)
-
-
 def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, configuration: Config) -> pd.DataFrame:
     """The rate of every estimation id at every future horizon, with the technique of its band,
     learning from every closed month of the id."""
     decision = backtest["decision"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"]
     truth = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & pool_series[RATE_COLUMN].notna() & (pool_series["vencen"] > 0)]
     rows = []
-    for estimation_id, monthly in truth.groupby(COMPOSITION_ID_COLUMN):
+    for composition_id, monthly in truth.groupby(COMPOSITION_ID_COLUMN):
         monthly = monthly.sort_values(configuration.period_col)
         history = logit(monthly[RATE_COLUMN].to_numpy(dtype=float))
         calendar_months = np.array([month.month for month in monthly[configuration.period_col]])
         for horizon in horizons:
             band_name = band_of_horizon(int(horizon), configuration.horizon_bands)
-            technique = decision.get((estimation_id, band_name), configuration.challenger_technique)
-            predicted = predict_logit(technique, history, calendar_months, int(horizon))
-            if not np.isfinite(predicted):
-                technique = configuration.challenger_technique
-                predicted = predict_logit(technique, history, calendar_months, int(horizon))
-            rows.append((estimation_id, int(horizon), technique, float(inverse_logit(predicted))))
+            technique = decision.get((composition_id, band_name), configuration.challenger_technique)
+            technique, rate = predict_composition(history, calendar_months, technique, int(horizon),
+                                                  configuration.challenger_technique)
+            rows.append((composition_id, int(horizon), technique, rate))
     return pd.DataFrame(rows, columns=[COMPOSITION_ID_COLUMN, "h", "tecnica", "tasa_pool_h"])
 
 
@@ -419,15 +412,13 @@ def rate_of_rows(future: pd.DataFrame, series_estimate: pd.DataFrame, pool_rates
     future = future.merge(pool_rates, on=[COMPOSITION_ID_COLUMN, "h"], how="left")
     future = future.merge(pool_reference[[COMPOSITION_ID_COLUMN, "tasa_pool"]], on=COMPOSITION_ID_COLUMN, how="left")
 
-    # the group's predicted rate, moved toward its credibility reference by (1 − z) of the difference
-    # of levels (logit scale): the same blend as step 11, applied to the prediction
+    # the composition's predicted rate, moved toward its credibility reference (prediction.py: the same
+    # computation as the exam and the audit)
     pool_rate = future["tasa_pool_h"]
-    shift = np.zeros(len(future))
-    if configuration.apply_credibility_shift:
-        blended = (future["z"] < 1) & future["ref_rate"].notna() & future["group_rate"].notna()
-        shift = np.where(blended, (1 - future["z"].fillna(1)) * (logit(future["ref_rate"].fillna(0.5))
-                                                                  - logit(future["group_rate"].fillna(0.5))), 0.0)
-    future["tasa"] = np.where(pool_rate.notna(), inverse_logit(logit(pool_rate.fillna(0.5)) + shift), np.nan)
+    rate, shift = shifted_rate(pool_rate, future["z"], future["ref_rate"], future["group_rate"],
+                               configuration.apply_credibility_shift)
+    future["credibility_shift_logit"] = shift
+    future["tasa"] = np.where(pool_rate.notna(), rate, np.nan)
     future["origen_tasa"] = np.where(pool_rate.notna(), RATE_FROM_POOL, None)
 
     # no pool: the rate of the mandatory cell, then the global rate (closed months)
@@ -444,20 +435,11 @@ def rate_of_rows(future: pd.DataFrame, series_estimate: pd.DataFrame, pool_rates
     future["tasa"] = future["tasa"].fillna(global_rate)
     future["tecnica"] = future["tecnica"].fillna(configuration.challenger_technique)
 
-    # the band: quantiles of the normalised error × binomial error with the unit's units due
-    bands = backtest["bands"].set_index(["tecnica", "h"])
-    judged = list(configuration.backtest_horizons)
+    # the band: quantiles of the normalised error × binomial error with the unit's units due (prediction.py)
     unit_units = future[UNIT_ID_COLUMN].map(forecast_units.set_index(UNIT_ID_COLUMN)[configuration.pipeline_units_col])
     unit_units = unit_units.fillna(future[configuration.pipeline_units_col])     # an extended row: its own units
-    se_rate = np.sqrt(future["tasa"] * (1 - future["tasa"]) / unit_units.clip(lower=1))
-    keys = list(zip(future["tecnica"], future["h"].map(lambda horizon: judged_horizon(int(horizon), judged))))
-    challenger_keys = [(configuration.challenger_technique, judged_h) for _, judged_h in keys]
-    q_low = np.array([bands["q_low_norm"].get(key, bands["q_low_norm"].get(fallback, -configuration.z))
-                      for key, fallback in zip(keys, challenger_keys)])
-    q_high = np.array([bands["q_high_norm"].get(key, bands["q_high_norm"].get(fallback, configuration.z))
-                       for key, fallback in zip(keys, challenger_keys)])
-    future["tasa_baja"] = np.clip(future["tasa"] + np.minimum(q_low, 0) * se_rate, 0, 1)
-    future["tasa_alta"] = np.clip(future["tasa"] + np.maximum(q_high, 0) * se_rate, 0, 1)
+    q_low, q_high = band_quantiles(backtest["bands"], future["tecnica"], future["h"], configuration)
+    future["tasa_baja"], future["tasa_alta"] = rate_band(future["tasa"], unit_units, q_low, q_high)
     return future.drop(columns=["_celda"])
 
 

@@ -274,7 +274,7 @@ def log_calendar_report(calendared: pd.DataFrame, configuration: Config, months_
         renewed_units = role_rows[configuration.renewed_units_col].sum(min_count=1)
         pipeline_units = role_rows[configuration.pipeline_units_col].sum()
         summary_rows.append({
-            "rol": role,
+            CALENDAR_ROLE_COLUMN: role,
             "meses": len(role_months),
             "desde": str(role_months[0]) if role_months else "",
             "hasta": str(role_months[-1]) if role_months else "",

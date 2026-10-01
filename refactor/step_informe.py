@@ -348,9 +348,11 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     if portfolio_summary is not None:
         for horizon, block in portfolio_summary.groupby("h"):
             framework = block[block["metodo"] == METHOD_FRAMEWORK].iloc[0]
-            spreadsheet = block[block["metodo"] != METHOD_FRAMEWORK].sort_values("error_total_medio").iloc[0]
-            headline.append((f"error del TOTAL en el examen, h = {horizon}: framework vs mejor hoja de cálculo",
-                             f"{framework['error_total_medio']:.1%} vs {spreadsheet['error_total_medio']:.1%} ({spreadsheet['metodo']})"))
+            spreadsheet = block[block["metodo"].str.startswith("hoja_")].sort_values("error_total_medio").iloc[0]
+            alone = block[block["metodo"] == "raw"]
+            headline.append((f"error del TOTAL en el examen, h = {horizon}: framework vs mejor hoja de cálculo vs serie sola",
+                             f"{framework['error_total_medio']:.1%} vs {spreadsheet['error_total_medio']:.1%} ({spreadsheet['metodo']})"
+                             + (f" vs {alone['error_total_medio'].iloc[0]:.1%}" if len(alone) else "")))
     if len(by_band):
         first = by_band.iloc[0]
         headline.append((f"error medio de la tasa por pool en el examen ({first['tramo']})",
@@ -373,8 +375,9 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
              "**Precisión en el examen por tramo** (error medio de la tasa en pp, ponderado por dinero; dentro_banda: "
              "proporción de errores dentro de la banda del 90 %):", "", markdown_table(by_band),
              "**Precisión en el examen por nivel de riesgo** (tramo corto):", "", markdown_table(by_level),
-             "**La cartera en el examen, serie a serie: el framework frente a la hoja de cálculo** (paso 19; cada serie "
-             "predicha como la predice el forecast, con solo lo que se sabía h meses antes; la hoja: la tasa de los últimos "
+             "**La cartera en el examen, serie a serie: el framework frente a la serie sola (raw) y a la hoja de cálculo** "
+             "(paso 19; cada serie predicha como la predice el forecast, con solo lo que se sabía h meses antes; raw: la serie "
+             "con su propia historia, sin escalera; la hoja: la tasa de los últimos "
              f"{configuration.baseline_months} meses por grano × la pipeline real; error_total: de la suma de la cartera; "
              "wape_series: serie a serie, sin compensaciones):", "",
              markdown_table(results["portfolio_exam_summary"], 3) if results.get("portfolio_exam_summary") is not None else "",
@@ -382,28 +385,30 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     precision_by_type = exam_precision_by_series_type(results)
     if precision_by_type is not None:
         overall = precision_by_type.iloc[0]
-        headline.append(("predicciones del examen dentro de su intervalo · WAPE serie a serie",
-                         f"{overall['en_intervalo']:.0%} de {int(overall['predicciones']):,} · {overall['wape']:.1%}"))
-        lines += ["**Cuánto acertamos, forecast serie a forecast serie** (la técnica elegida de cada serie, en cada mes de "
-                  "examen y horizonte, aplicada a su propia pipeline; cada predicción con su intervalo, construido como la banda "
-                  "del forecast; en_intervalo: proporción de predicciones cuyo valor real cayó dentro). Cruzado por el tipo de "
-                  "serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad, solo donde son medibles:", "",
+        headline.append(("examen serie a serie: dentro del intervalo · WAPE, framework frente a la serie sola (raw)",
+                         f"{overall['en_intervalo']:.0%} vs {overall['en_intervalo_raw']:.0%} · {overall['wape']:.1%} vs {overall['wape_raw']:.1%}"))
+        lines += ["**Cuánto acertamos, forecast serie a forecast serie, y cuánto mejora frente a la serie sola** (paso 19: en cada "
+                  "mes de examen y horizonte, el framework —su composición con credibilidad— y la serie sola con su propia historia "
+                  "(raw), sobre las mismas filas y su propia pipeline; cada predicción con su intervalo, construido como la banda "
+                  "del forecast). Cruzado por el tipo de serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad:", "",
                   markdown_table(precision_by_type.assign(
                       predicciones=precision_by_type["predicciones"].astype(int),
                       en_intervalo=precision_by_type["en_intervalo"].map("{:.0%}".format),
+                      en_intervalo_raw=precision_by_type["en_intervalo_raw"].map("{:.0%}".format),
                       wape=precision_by_type["wape"].map("{:.1%}".format),
+                      wape_raw=precision_by_type["wape_raw"].map("{:.1%}".format),
                       sesgo=precision_by_type["sesgo"].map("{:+.1%}".format)), 0)]
     return "\n".join(lines) + "\n"
 
 
 def exam_precision_by_series_type(results: dict):
-    """The exam of every forecast series (its chosen technique) summed by type of series: all, by
-    volatility, by trend and by seasonality (counts and units added, then the ratios)."""
-    audit = results.get("audit")
-    if not audit:
+    """The exam of every forecast series summed by type of series (all, by volatility, trend and seasonality):
+    the framework against the series alone (raw), counts and units added, then the ratios."""
+    audit, series_exam = results.get("audit"), results.get("series_exam")
+    if not audit or not series_exam:
         return None
-    exam = audit["series_exam"].merge(audit["series_dynamics"], on=SERIES_ID_COLUMN, how="left")
-    exam = exam[exam["exam_status"] == "tested"]
+    exam = series_exam["per_series"].merge(audit["series_dynamics"], on=SERIES_ID_COLUMN, how="left")
+    exam = exam[exam["framework_predictions"] > 0]
     if exam.empty:
         return None
     measured = exam["measurable"] == "yes"
@@ -414,16 +419,18 @@ def exam_precision_by_series_type(results: dict):
                 ("sin tendencia (medible)", measured & exam["trend"].fillna(0).eq(0)),
                 ("estacional (medible)", measured & exam["seasonal"].eq(1)),
                 ("no estacional (medible)", measured & exam["seasonal"].eq(0)),
-                ("dinámica no medible (poco soporte o historia)", ~measured)]
+                ("sin dinámica medible / sin composición", ~measured)]
     rows = []
     for name, mask in segments:
         block = exam[mask]
         if block.empty:
             continue
-        rows.append({"segmento": name, "series": len(block), "predicciones": block["exam_predictions"].sum(),
-                     "en_intervalo": block["exam_in_band"].sum() / block["exam_predictions"].sum(),
-                     "wape": block["exam_abs_err_units"].sum() / block["exam_real_units"].sum(),
-                     "sesgo": block["exam_pred_units"].sum() / block["exam_real_units"].sum() - 1})
+        rows.append({"segmento": name, "series": len(block), "predicciones": block["framework_predictions"].sum(),
+                     "en_intervalo": block["framework_in_band"].sum() / block["framework_predictions"].sum(),
+                     "en_intervalo_raw": block["raw_in_band"].sum() / block["raw_predictions"].sum(),
+                     "wape": block["framework_abs_err_units"].sum() / block["framework_real_units"].sum(),
+                     "wape_raw": block["raw_abs_err_units"].sum() / block["raw_real_units"].sum(),
+                     "sesgo": block["framework_pred_units"].sum() / block["framework_real_units"].sum() - 1})
     return pd.DataFrame(rows)
 
 

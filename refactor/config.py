@@ -192,6 +192,13 @@ class Config:
     flag_time_series_col: str = "flag_time_series"          # marks the rows of the time_series universe
 
     business_mandatory_dims: list = field(default_factory=list)       # open the series and the uplift cell
+    leveled_dims: dict = field(default_factory=dict)  # dims given two generated levels (step 02b): {name: {"source": raw
+                                                      # column (default: name), "type": "ordinal" | "nominal"}};
+                                                      # <name>_level_2 = the raw value, <name>_level_1 = values grouped
+                                                      # by their standardised renewal rate. The source must be mandatory
+    levels_path: Optional[str] = None                 # the JSON of the generated groups (None: <output_folder>/sff_levels.json);
+                                                      # a later run reuses it; delete it to regenerate
+    level_merge_max_pp: float = 5.0                   # two neighbouring values merge while their rates differ by at most this
     structural_timevarying_dims: dict = field(default_factory=dict)   # column → "negative" | "positive"
     extra_renovacion: list = field(default_factory=list)              # enter the rate series only
     extra_revalorizacion: list = field(default_factory=list)          # enter the uplift cell only
@@ -218,7 +225,9 @@ class Config:
 
     dimension_pairs_shown: int = 20       # step 09: pairs of dimensions kept, the ones with the most interaction
     # ─── the ladder (steps 10 and 11) ───
-    own_rate_floor: float = 271.0         # contracts in a typical month to predict ALONE: ±5 pp at 90 % (p = 0.5).
+    own_rate_floor: float = 271.0
+    collapse_passes: int = 2            # stage 3 merges at most this many mandatory dims (collapse order); the passes
+                                        # after them are only searched for a credibility reference (stage 4)         # contracts in a typical month to predict ALONE: ±5 pp at 90 % (p = 0.5).
                                           # 30 says who may speak; 271 who may speak alone
     k_cred: float = 60.0                  # Bühlmann k when a relative has too few siblings to estimate it: a series
                                           # with n = 30 keeps 33 % of its own rate ("twice the floor to be believed half")
@@ -248,8 +257,13 @@ class Config:
     acquisition_discount: float = 0.4             # an acquisition is sold with this discount (it renews without it)
     acquisition_level_window_months: int = 3      # acquisition level: last 3 closed months vs the same months a year before
     acquisition_auv_window_months: int = 12       # acquisition value per unit: Σ value / Σ units of the last 12 closed months
-    apply_credibility_shift: bool = True  # a series that borrows keeps z × its own difference of level with the pool
-                                          # (logit scale); False = it takes the pool's prediction as is
+    # the confidence of a future row (step 17): how sure the forecast is of its rate
+    confidence_high_band_pp: float = 5.0      # high: its rate band within ±5 pp (the precision of own_rate_floor)…
+    confidence_high_exam_pp: float = 5.0      # …its composition judged by the backtest, with an exam error ≤ 5 pp
+    confidence_medium_band_pp: float = 10.0   # medium: judged, and a band within ±10 pp; low: the rest (or not judged)
+    apply_credibility_shift: bool = True  # a group below own_rate_floor moves its predicted rate toward its credibility
+                                          # reference by (1 − z) of their difference of level (logit scale); False = the
+                                          # group's prediction as is
 
     # ─── the spreadsheet baseline (step 19): what the business does today ───
     baseline_months: int = 12             # the rate of the last N closed months… (what the business does: 12 months per cell)

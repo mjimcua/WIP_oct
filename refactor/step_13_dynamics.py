@@ -38,10 +38,10 @@ Actions (logged as they are done):
 Checks (logged as they are made, numbered, at the level of their status):
    1. every pool measured has its attributes (φ ≥ 0, p-values between 0 and 1)
    2. the portfolio profile covers the 12 calendar months
-   3-4. tables sff_dinamica_pool and sff_estacionalidad_cartera written and read back
+   3-4. tables sff_composition_dynamics and sff_estacionalidad_cartera written and read back
 
 Output: (the dynamics of every pool, the month profile of the portfolio) · tables
-sff_dinamica_pool, sff_estacionalidad_cartera.
+sff_composition_dynamics, sff_estacionalidad_cartera.
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
@@ -50,8 +50,8 @@ import pandas as pd
 from scipy import stats
 
 from config import Config
-from vocabulario import (ESTIMATION_ID_COLUMN, GATE_LEVEL, TABLE_POOL_DYNAMICS, TABLE_PORTFOLIO_SEASONALITY,
-                         TRUTH_ROLES)
+from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, TABLE_POOL_DYNAMICS,
+                         TABLE_PORTFOLIO_SEASONALITY, TRUTH_ROLES)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ STEP_ACTIONS = ["the pools measured: support and history",
                 "write the pools' dynamics and the portfolio's profile (checks 3-4)",
                 "count the checks; stop if any failed",
                 "show the general verdict: the portfolio's profile and how many pools show a trend, a season, φ > 1"]
-STEP_OUTPUT = "one row per pool (φ, trend, season, months high/low) · the portfolio's month profile · tables sff_dinamica_pool, sff_estacionalidad_cartera"
+STEP_OUTPUT = "one row per pool (φ, trend, season, months high/low) · the portfolio's month profile · tables sff_composition_dynamics, sff_estacionalidad_cartera"
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 PERCENTAGE_POINTS = 100
@@ -81,11 +81,11 @@ def measure_dynamics(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, co
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
     check_log = []
     period_column = configuration.period_col
-    truth_months = pool_series[pool_series["rol"].isin(TRUTH_ROLES) & (pool_series["vencen"] > 0)]
+    truth_months = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & (pool_series["vencen"] > 0)]
 
     # [1] the pools measured
-    months_per_pool = truth_months.groupby(ESTIMATION_ID_COLUMN).size()
-    measured_ids = [estimation_id for estimation_id in pool_reference.loc[pool_reference["gate"] == GATE_LEVEL, ESTIMATION_ID_COLUMN]
+    months_per_pool = truth_months.groupby(COMPOSITION_ID_COLUMN).size()
+    measured_ids = [estimation_id for estimation_id in pool_reference.loc[pool_reference["gate"] == GATE_LEVEL, COMPOSITION_ID_COLUMN]
                     if months_per_pool.get(estimation_id, 0) >= configuration.dynamics_min_months]
     configuration.log_action(STEP_LABEL, 1, f"{len(measured_ids):,} pools measured (support ≥ {configuration.support_floor:.0f} "
                                             f"and ≥ {configuration.dynamics_min_months} months) of {len(pool_reference):,}")
@@ -93,12 +93,12 @@ def measure_dynamics(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, co
     # [2] the attributes of every pool
     dynamics_rows = []
     for estimation_id in measured_ids:
-        monthly = truth_months[truth_months[ESTIMATION_ID_COLUMN] == estimation_id].sort_values(period_column)
-        dynamics_rows.append({ESTIMATION_ID_COLUMN: estimation_id,
+        monthly = truth_months[truth_months[COMPOSITION_ID_COLUMN] == estimation_id].sort_values(period_column)
+        dynamics_rows.append({COMPOSITION_ID_COLUMN: estimation_id,
                               **dynamics_of_one_series(monthly, period_column, configuration)})
     pool_dynamics = pd.DataFrame(dynamics_rows)
     if len(pool_dynamics):
-        pool_dynamics = pool_dynamics.merge(pool_reference[[ESTIMATION_ID_COLUMN, "usd_por_predecir"]], on=ESTIMATION_ID_COLUMN)
+        pool_dynamics = pool_dynamics.merge(pool_reference[[COMPOSITION_ID_COLUMN, "usd_por_predecir"]], on=COMPOSITION_ID_COLUMN)
     configuration.log_action(STEP_LABEL, 2, f"φ median {pool_dynamics['phi'].median():.2f} · "
                                             f"{int(pool_dynamics['estacional'].sum())} seasonal · "
                                             f"{int((pool_dynamics['tendencia'] != 0).sum())} with a trend"

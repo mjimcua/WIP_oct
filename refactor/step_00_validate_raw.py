@@ -31,6 +31,7 @@ Output: a copy of the raw, same rows and columns, with the period as a monthly P
 import pandas as pd
 
 from config import COLUMN_ROLE_IGNORE, Config, parse_month
+from vocabulario import CALENDAR_ROLE_COLUMN
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -154,7 +155,7 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> l
     configuration.log_check(STEP_LABEL, check_log, "the calendar leaves months to train",
                             boundaries["test_start"] > first_month,
                             failure_detail=f"the exam starts at {boundaries['test_start']} and the raw starts at "
-                                           f"{first_month}: no month to train (lower test_months or pending_close_months)",
+                                           f"{first_month}: no month to train (lower test_months)",
                             context=f"training {first_month}..{boundaries['test_start'] - 1}")
 
     # [10] a month with no row at all is worth a look, not a stop
@@ -173,12 +174,12 @@ def log_raw_report(validated: pd.DataFrame, configuration: Config, column_roles:
     for column_name, role in column_roles.items():
         if column_name in validated.columns:
             columns_by_role.setdefault(role, []).append(column_name)
-    configuration.show_table(pd.DataFrame([{"rol": role, "columnas": len(role_columns), "nombres": ", ".join(role_columns)}
+    configuration.show_table(pd.DataFrame([{CALENDAR_ROLE_COLUMN: role, "columnas": len(role_columns), "nombres": ", ".join(role_columns)}
                                            for role, role_columns in columns_by_role.items()]))
 
     configuration.logger.doc(f"[{STEP_LABEL}] the calendar of the Config on these months: "
                              f"{configuration.calendar_description()}")
     rows_per_role = pd.Series(configuration.role_of_months(validated[configuration.period_col])).value_counts()
     months_per_role = pd.Series(configuration.role_of_months(pd.Series(raw_months))).value_counts()
-    configuration.show_table(pd.DataFrame([{"rol": role, "meses": int(months_per_role.get(role, 0)), "filas": int(row_count)}
+    configuration.show_table(pd.DataFrame([{CALENDAR_ROLE_COLUMN: role, "meses": int(months_per_role.get(role, 0)), "filas": int(row_count)}
                                            for role, row_count in rows_per_role.items()]))
