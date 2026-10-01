@@ -23,6 +23,8 @@ def test_the_functions() -> None:
     rate, _ = shifted_rate([0.8], [0.0], [0.9], [0.8])
     check(abs(rate[0] - 0.9) < 1e-12, "with z = 0 the composition's prediction moves all the way to its reference level")
     check(np.all(credibility_shift([0.5], [0.9], [0.8], apply=False) == 0), "the shift can be switched off (apply_credibility_shift)")
+    untouched, _ = shifted_rate([1.0, 0.0], [1.0, 1.0], [np.nan, np.nan], [np.nan, np.nan])
+    check(list(untouched) == [1.0, 0.0], "without a shift the rate is the composition's prediction, untouched, also at exactly 1 or 0")
     low, high = rate_band([0.98, 0.5], [10, 100], np.array([-2.0, -2.0]), np.array([2.0, 2.0]))
     check(high[0] <= 1 and low[0] < 0.98 and abs((high[1] - 0.5) - 2 * np.sqrt(0.25 / 100)) < 1e-12,
           "the band: rate ± quantile × binomial error with the units due, never above 1")

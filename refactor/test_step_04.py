@@ -59,12 +59,18 @@ def test_the_failures() -> None:
     mixed_flag.loc[mixed_flag.index[mixed_flag["fu_id"] == unit_with_two_rows][0], "flag_time_series"] = 1
     check_stops(lambda: build_forecast_units(mixed_flag, configuration), "is the same in every fine row of a unit",
                 "a unit whose fine rows disagree on the time_series flag stops")
-    no_pipeline = fine.copy()
-    no_pipeline.loc[no_pipeline.index[0], "total_tr_units"] = 0
-    single_row_unit = no_pipeline["fu_id"].iloc[0]
-    no_pipeline.loc[no_pipeline["fu_id"] == single_row_unit, "total_tr_units"] = 0
-    _, console = run_step(no_pipeline, configuration)
-    check("WARN  every unit has something falling due" in console, "a unit with nothing due is a warning")
+    single_row_unit = fine["fu_id"].iloc[0]
+    wiped = fine.copy()
+    wiped.loc[wiped["fu_id"] == single_row_unit, "total_tr_units"] = 0          # the calendar wiped it, the extract had it
+    _, console = run_step(wiped, configuration)
+    check("WARN  every unit has something falling due in the extract" not in console
+          and "1 wiped on purpose by the calendar" in console,
+          "a unit the calendar wiped on purpose (due in the extract, 0 after the calendar) is counted apart, not warned")
+    zero_in_extract = wiped.copy()
+    zero_in_extract.loc[zero_in_extract["fu_id"] == single_row_unit, "s0_vencen_unidades"] = 0
+    _, console = run_step(zero_in_extract, configuration)
+    check("WARN  every unit has something falling due in the extract" in console,
+          "a unit at 0 in the extract itself is a warning")
 
 
 if __name__ == "__main__":

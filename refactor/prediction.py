@@ -56,12 +56,13 @@ def credibility_shift(z, reference_level, composition_level, apply: bool = True)
 
 
 def shifted_rate(composition_rate, z, reference_level, composition_level, apply: bool = True) -> tuple:
-    """(rate of the forecast series, shift in logit): the composition's prediction moved toward its reference."""
+    """(rate of the forecast series, shift in logit): the composition's prediction moved toward its reference.
+    Without a shift the rate IS the composition's prediction, untouched (also when it is exactly 0 or 1);
+    only a shifted rate goes through the logit scale."""
     shift = credibility_shift(z, reference_level, composition_level, apply)
     composition_rate = np.asarray(pd.Series(composition_rate), dtype=float)
-    rate = np.where(np.isfinite(composition_rate),
-                    inverse_logit(logit(np.clip(np.nan_to_num(composition_rate, nan=0.5), LEVEL_CLIP, 1 - LEVEL_CLIP)) + shift),
-                    np.nan)
+    moved = inverse_logit(logit(np.clip(np.nan_to_num(composition_rate, nan=0.5), LEVEL_CLIP, 1 - LEVEL_CLIP)) + shift)
+    rate = np.where(shift != 0, moved, composition_rate)
     return rate, shift
 
 

@@ -197,7 +197,9 @@ def dynamics_of_one_series(monthly: pd.DataFrame, period_column: str, configurat
     first_half = detrended[years <= middle_year].groupby("mes")["residuo"].mean()
     second_half = detrended[years > middle_year].groupby("mes")["residuo"].mean()
     shared = first_half.index.intersection(second_half.index)
-    consistency = float(np.corrcoef(first_half[shared], second_half[shared])[0, 1]) if len(shared) >= 3 else np.nan
+    # a profile that does not move in one of the halves has no correlation (a series with the same rate every month)
+    both_move = len(shared) >= 3 and first_half[shared].std() > 0 and second_half[shared].std() > 0
+    consistency = float(np.corrcoef(first_half[shared], second_half[shared])[0, 1]) if both_move else np.nan
 
     profile = pd.DataFrame({"mes": month_effect.index.astype(int), "efecto_pp": deviation_pp.to_numpy(),
                             "error_pp": PERCENTAGE_POINTS * month_error.to_numpy(), "meses_observados": month_count.to_numpy(),

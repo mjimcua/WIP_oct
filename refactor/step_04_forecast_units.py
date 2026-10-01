@@ -20,7 +20,8 @@ Checks (logged as they are made, numbered, at the level of their status):
    1. the time_series flag is the same in every fine row of a unit
    2. the four measures are conserved: Σ fine = Σ units
    3. renewals are numbers in closed months and null from the current month on
-   4. every unit has something falling due                           (warning only)
+   4. every unit has something falling due in the extract (the ones the calendar wiped on purpose are
+      counted apart)                                                  (warning only)
    5. table sff_fact_fu written and read back
 
 Output: the forecast units (one row per fu_id: ids, keys, series columns, month, role,
@@ -32,9 +33,9 @@ current-month mark, time_series flag, number of fine rows, the four measures sum
 import pandas as pd
 
 from config import Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, FINE_ROWS_COLUMN, CURRENT_MONTH_COLUMN, ROLE_PROJECTION,
-                         ROLES_IN_ORDER, SERIES_ID_COLUMN, SERIES_KEY_COLUMN, TABLE_UNITS, UNIT_ID_COLUMN,
-                         UNIT_KEY_COLUMN)
+from vocabulario import (CALENDAR_ROLE_COLUMN, CURRENT_MONTH_COLUMN, FINE_ROWS_COLUMN, ROLES_IN_ORDER,
+                         ROLE_PROJECTION, S0_PIPELINE_UNITS_COLUMN, SERIES_ID_COLUMN, SERIES_KEY_COLUMN, TABLE_UNITS,
+                         UNIT_ID_COLUMN, UNIT_KEY_COLUMN)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -91,11 +92,21 @@ def build_forecast_units(fine_table: pd.DataFrame, configuration: Config) -> pd.
     check_flag_constant_inside_units(fine_table, grouped_by_unit, configuration, check_log)
     check_money_conserved(fine_table, forecast_units, configuration, check_log)
     check_renewals_by_month(forecast_units, configuration, check_log)
+    # a unit at 0 units due: either the calendar wiped it on purpose (step 02: the pipeline of a 1-year
+    # licence sold or renewed from the current month on; step 17 projects it), or the extract brings it at 0
     units_without_pipeline = forecast_units[forecast_units[configuration.pipeline_units_col] == 0]
-    configuration.log_check(STEP_LABEL, check_log, "every unit has something falling due", units_without_pipeline.empty,
-                            failure_detail=f"{len(units_without_pipeline):,} units with 0 units due: their rate is undefined",
+    if S0_PIPELINE_UNITS_COLUMN in fine_table.columns:
+        due_in_extract = fine_table.groupby(UNIT_ID_COLUMN)[S0_PIPELINE_UNITS_COLUMN].sum()
+        wiped_on_purpose = units_without_pipeline[UNIT_ID_COLUMN].map(due_in_extract).fillna(0) > 0
+    else:
+        wiped_on_purpose = pd.Series(False, index=units_without_pipeline.index)
+    zero_in_extract = units_without_pipeline[~wiped_on_purpose]
+    configuration.log_action(STEP_LABEL, 4, f"units at 0 units due: {int(wiped_on_purpose.sum()):,} wiped on purpose by the calendar "
+                                            f"(step 02, projected in step 17) · {len(zero_in_extract):,} at 0 in the extract")
+    configuration.log_check(STEP_LABEL, check_log, "every unit has something falling due in the extract", zero_in_extract.empty,
+                            failure_detail=f"{len(zero_in_extract):,} units at 0 units due in the extract itself: their rate is undefined",
                             blocking=False,
-                            examples=units_without_pipeline[[UNIT_ID_COLUMN, configuration.period_col] + measures])
+                            examples=zero_in_extract[[UNIT_ID_COLUMN, configuration.period_col] + measures])
 
     # [5] the units table, written
     configuration.log_action(STEP_LABEL, 5, "writing the units table")

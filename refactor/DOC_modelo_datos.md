@@ -106,7 +106,7 @@ Para cruzar el acierto con la dinámica se segmenta por `s13_series_*` (por ejem
 | `sff_series_dynamics` | forecast serie | `fs_id` | φ, tendencia y estacionalidad de la propia serie, y si son medibles |
 | `sff_series_backtest` | forecast serie × mes de examen × horizonte × técnica | `fs_id` | cada técnica aplicada a la forecast serie, con su intervalo |
 | `sff_series_technique_summary` | forecast serie × tramo × técnica | `fs_id` | error medio, sesgo, WAPE, ranking en la serie, elegida, mejor para la serie |
-| `sff_dimension_levels` | dimensión × grupo | — | los grupos generados de `level_1` (paso 02b), con su tasa estandarizada por año |
+| `sff_dimension_levels` | dimensión × grupo | — | los grupos generados de `level_1` (paso 01b), con su tasa estandarizada por año |
 
 ## Las sumas de comprobación
 

@@ -62,7 +62,26 @@ def configuration_path():
     return tempfile.mkdtemp() + "/x"
 
 
+def test_a_constant_series() -> None:
+    print("C · series that never vary (0 % every month; 1-2 units that always renew): no numpy warning")
+    import warnings
+    import numpy as np
+    from step_13_dynamics import dynamics_of_one_series
+    tiny = np.r_[np.full(30, 1.0), np.full(6, 2.0)]
+    for name, due, renewed in (("0 % every month", 10.0, 0.0), ("1-2 units that always renew", tiny, tiny)):
+        months = pd.DataFrame({"period": pd.period_range("2023-01", periods=36, freq="M"), "vencen": due, "renovadas": renewed})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            try:
+                dynamics_of_one_series(months, "period", synthetic_with())
+                clean = True
+            except RuntimeWarning:
+                clean = False
+        check(clean, f"{name}: measured without a RuntimeWarning (a profile that does not move has no correlation)")
+
+
 if __name__ == "__main__":
     test_the_dynamics()
     test_the_report()
+    test_a_constant_series()
     finish()

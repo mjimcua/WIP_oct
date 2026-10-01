@@ -18,8 +18,8 @@ Three pieces (the pattern of a data pipeline: node + data catalogue + pipeline):
 
 CHECKPOINTS (save_checkpoints, on by default): every step saves the tables it writes to
 checkpoint_folder (one .pkl per table) and records itself in checkpoint_manifest.json: when it
-finished, the hash of its code, and the Config fields it changed (step 02b changes the mandatory
-dims). run_from(step) loads every table of the steps before it and runs from that step on.
+finished and the hash of its code. No step changes the Config, so a checkpoint is only tables.
+run_from(step) loads every table of the steps before it and runs from that step on.
 YOU decide when a full run is needed; the orchestrator only WARNS (it does not stop) when, since the
 checkpoint was saved:
   - the code of a step that is loaded (not re-run) changed, or a shared module changed
@@ -55,7 +55,7 @@ from config import Config
 from step_00_validate_raw import validate_raw
 from step_01_validate_values import validate_values
 from step_02_apply_calendar import apply_calendar
-from step_02b_dimension_levels import apply_dimension_levels
+from step_01b_dimension_levels import apply_dimension_levels
 from step_03_fine_table import build_fine_table
 from step_04_forecast_units import build_forecast_units
 from step_05_lookups import build_lookups
@@ -144,15 +144,14 @@ def contracts(configuration: Config) -> dict:
 
 @dataclass
 class Step:
-    """A step: the tables it reads and writes, how it runs on the context, the module of its code
-    (its hash goes to the checkpoint) and the Config fields it changes while it runs (saved and restored)."""
+    """A step: the tables it reads and writes, how it runs on the context, and the module of its code
+    (its hash goes to the checkpoint). A step never changes the Config."""
     name: str
     label: str
     reads: tuple
     writes: tuple
     run: Callable
     module: str = None
-    config_writes: tuple = ()
 
 
 @dataclass
@@ -253,8 +252,6 @@ class Orchestrator:
                 with open(os.path.join(self.folder, f"{table}.pkl"), "rb") as handle:
                     self.context.tables[table] = pickle.load(handle)
                 self.context.producer[table] = name
-            for field_name, value in saved.get("config_writes", {}).items():
-                setattr(self.configuration, field_name, value)          # what the step had changed in the Config
         last = manifest["steps"][before[-1]]["finished"] if before else "-"
         self.configuration.logger.doc(f"[checkpoint] {len(before)} steps loaded from {self.folder} "
                                       f"({before[0] if before else '-'} … {before[-1] if before else '-'}, saved {last}) "
@@ -299,8 +296,7 @@ class Orchestrator:
                                             "shared_code": code_hash(SHARED_MODULES), "steps": {}}
         manifest["steps"][step.name] = {
             "finished": datetime.now().isoformat(timespec="seconds"), "seconds": round(seconds, 1),
-            "tables": list(step.writes), "code": code_hash([step.module] if step.module else []),
-            "config_writes": {field_name: getattr(self.configuration, field_name) for field_name in step.config_writes}}
+            "tables": list(step.writes), "code": code_hash([step.module] if step.module else [])}
         self.write_manifest(manifest)
 
     def read_manifest(self) -> dict:
@@ -361,12 +357,10 @@ def code_hash(module_names: list) -> str:
 
 
 def config_fingerprint(configuration: Config, steps) -> dict:
-    """The Config as text, field by field, without what cannot be compared (the engine, the SQL text)
-    and without what the steps themselves change (restored from the checkpoint instead)."""
-    changed_by_steps = {field_name for step in steps for field_name in step.config_writes}
+    """The Config as text, field by field, without what cannot be compared (the engine, the SQL text)."""
     fingerprint = {}
     for config_field in dataclasses.fields(configuration):
-        if config_field.name in changed_by_steps or config_field.name in ("sql_engine", "raw_extract_sql"):
+        if config_field.name in ("sql_engine", "raw_extract_sql"):
             continue
         value = getattr(configuration, config_field.name)
         try:
@@ -489,10 +483,12 @@ def sff_steps() -> list:
         Step("split_time_series", "20a", ("validated_extract",), ("validated_renewals", "time_series_rows"), split, module="step_20_time_series"),
         Step("validate_values", "01", ("validated_renewals",), ("validated_raw",),
              lambda context: {"validated_raw": validate_values(context["validated_renewals"], context.configuration)}, module="step_01_validate_values"),
-        Step("calendar", "02", ("validated_raw",), ("calendared_extract",),
-             lambda context: {"calendared_extract": apply_calendar(context["validated_raw"], context.configuration)}, module="step_02_apply_calendar"),
-        Step("dimension_levels", "02b", ("calendared_extract",), ("calendared_raw",),
-             lambda context: {"calendared_raw": apply_dimension_levels(context["calendared_extract"], context.configuration)}, module="step_02b_dimension_levels", config_writes=("business_mandatory_dims",)),
+        Step("dimension_levels", "01b", ("validated_raw",), ("leveled_raw",),
+             lambda context: {"leveled_raw": apply_dimension_levels(context["validated_raw"], context.configuration)},
+             module="step_01b_dimension_levels"),
+        Step("calendar", "02", ("leveled_raw",), ("calendared_raw",),
+             lambda context: {"calendared_raw": apply_calendar(context["leveled_raw"], context.configuration)},
+             module="step_02_apply_calendar"),
         Step("fine_table", "03", ("calendared_raw",), ("fine_table",),
              lambda context: {"fine_table": build_fine_table(context["calendared_raw"], context.configuration)}, module="step_03_fine_table"),
         Step("forecast_units", "04", ("fine_table",), ("forecast_units",),

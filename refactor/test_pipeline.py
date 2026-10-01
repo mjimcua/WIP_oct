@@ -87,20 +87,16 @@ def test_the_checkpoints() -> None:
                 "run from 'backtest'", "a step missing from the checkpoint stops the run, naming the step to run first")
 
 
-def test_what_a_step_changes_in_the_config() -> None:
-    print("E · what a step changes in the Config is saved and restored (step 02b: the mandatory dims)")
+def test_resuming_with_leveled_dims() -> None:
+    print("E · with a leveled dim, resuming after it gives the same result (no step changes the Config)")
     folder, levels = tempfile.mkdtemp(), os.path.join(tempfile.mkdtemp(), "levels.json")
-    options = dict(checkpoint_folder=folder, leveled_dims={"product": {"type": "nominal"}}, levels_path=levels)
+    options = dict(checkpoint_folder=folder, leveled_dims={"product": "nominal"}, levels_path=levels)
     full = {}
     console_of(lambda: full.update(Orchestrator(synthetic_with(**options)).run()))
-    configuration = synthetic_with(**options)
-    check(configuration.business_mandatory_dims == ["region", "product"], "a new Config starts with the declared dims")
     resumed = {}
-    console = console_of(lambda: resumed.update(Orchestrator(configuration).run_from("ladder")))
-    check(configuration.business_mandatory_dims == ["region", "product_level_1", "product_level_2"]
-          and "changed since the checkpoint" not in console,
-          "resuming after step 02b restores the dims it had set, without a false warning")
-    check(abs(total_2026(resumed) - total_2026(full)) < 0.01, "and the forecast is the same as the full run")
+    console = console_of(lambda: resumed.update(Orchestrator(synthetic_with(**options)).run_from("ladder")))
+    check("changed since the checkpoint" not in console and abs(total_2026(resumed) - total_2026(full)) < 0.01,
+          "resuming from the ladder: no warning and the same forecast as the full run")
 
 
 if __name__ == "__main__":
@@ -108,5 +104,5 @@ if __name__ == "__main__":
     test_one_step_at_a_time()
     test_the_contracts()
     test_the_checkpoints()
-    test_what_a_step_changes_in_the_config()
+    test_resuming_with_leveled_dims()
     finish()

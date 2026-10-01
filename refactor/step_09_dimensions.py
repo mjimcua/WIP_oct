@@ -133,13 +133,17 @@ def weighted_r2(frame: pd.DataFrame, dimensions: list) -> float:
     return float(max(0.0, 1 - residual / total)) if total > 0 else 0.0
 
 
-def family_and_level(dimension_name: str) -> tuple:
-    """("product", 2) for "product_level_2"; (name, 1) for a dimension outside a hierarchy."""
+def family_and_level(dimension_name: str, dimensions=()) -> tuple:
+    """("product", 2) for "product_level_2". A dimension X without a level of its own is the FINEST level
+    of its family when the dimensions include an X_level_N (a leveled dim: its raw value above the level
+    the library generated): (X, highest N + 1). Otherwise (name, 1), a dimension outside a hierarchy."""
     if LEVEL_MARK in dimension_name:
         family, _, level_text = dimension_name.rpartition(LEVEL_MARK)
         if level_text.isdigit():
             return family, int(level_text)
-    return dimension_name, 1
+    coarser = [family_and_level(other)[1] for other in dimensions
+               if other != dimension_name and family_and_level(other)[0] == dimension_name]
+    return dimension_name, (max(coarser) + 1 if coarser else 1)
 
 
 def sequential_collapse_order(base: pd.DataFrame, mandatory_dims: list) -> list:
@@ -152,7 +156,8 @@ def sequential_collapse_order(base: pd.DataFrame, mandatory_dims: list) -> list:
     current_r2 = weighted_r2(base, remaining)
     while remaining:
         droppable = [dimension for dimension in remaining
-                     if not any(family_and_level(other) == (family_and_level(dimension)[0], family_and_level(dimension)[1] + 1)
+                     if not any(family_and_level(other, remaining)
+                                == (family_and_level(dimension, remaining)[0], family_and_level(dimension, remaining)[1] + 1)
                                 for other in remaining)]
         losses = {}
         for dimension in droppable:
@@ -289,8 +294,8 @@ def check_dimensions(base: pd.DataFrame, decision: pd.DataFrame, collapse_order:
     position_of = {dimension: position for position, (dimension, _) in enumerate(collapse_order, 1)}
     broken = []
     for dimension in mandatory_dims:
-        family, level = family_and_level(dimension)
-        finer = [other for other in mandatory_dims if family_and_level(other) == (family, level + 1)]
+        family, level = family_and_level(dimension, mandatory_dims)
+        finer = [other for other in mandatory_dims if family_and_level(other, mandatory_dims) == (family, level + 1)]
         for finer_dimension in finer:
             if position_of[dimension] < position_of[finer_dimension]:
                 broken.append(f"{dimension} before {finer_dimension}")

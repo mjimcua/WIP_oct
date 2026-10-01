@@ -132,10 +132,11 @@ def discount_bucket_labels(discount_values: pd.Series, bucket_edges_pct: list) -
 
 
 def is_one_year(rows: pd.DataFrame, configuration) -> pd.Series:
-    """The rows of a 1-year licence (term_column = one_year_term_value); every row when there is no term column."""
-    if configuration.term_column and configuration.term_column in rows.columns:
-        return rows[configuration.term_column].astype(str) == str(configuration.one_year_term_value)
-    return pd.Series(True, index=rows.index)
+    """The rows of a 1-year licence (term_column = one_year_term_value); every row when no term_column is
+    configured. term_column is a mandatory dim (checked when the Config is built): it is in every step."""
+    if not configuration.term_column:
+        return pd.Series(True, index=rows.index)
+    return rows[configuration.term_column].astype(str) == str(configuration.one_year_term_value)
 
 
 ROLE_PURPOSES = [
@@ -149,7 +150,9 @@ ROLE_PURPOSES = [
     (COLUMN_ROLE_BOTH_EXTRAS, "both extras"),
     (COLUMN_ROLE_FORMULA_INPUT, "inputs of a formula (exact discount, SKU), not a dimension"),
     (COLUMN_ROLE_IGNORE, "read and not used")]
-LEVELED_ROLE = "niveles generados (02b)"
+LEVELED_ROLE = "niveles generados (01b)"
+GENERATED_LEVEL_SUFFIX = "_level_1"           # the coarse level the library generates for a leveled dim
+LEVEL_TYPES = ("ordinal", "nominal")          # ordinal: only neighbouring values merge · nominal: any two
 
 
 def roles_overview(columns, configuration) -> pd.DataFrame:
@@ -164,17 +167,13 @@ def roles_overview(columns, configuration) -> pd.DataFrame:
         if role == COLUMN_ROLE_BOTH_EXTRAS and not role_columns:
             continue
         rows.append({"rol": role, "columnas": len(role_columns), "nombres": ", ".join(role_columns), "para_que": purpose})
-    leveled = []
-    for name, spec in (configuration.leveled_dims or {}).items():
-        source = (spec or {}).get("source", name)
-        level_type = (spec or {}).get("type", "nominal")
-        made = [column for column in (f"{name}_level_1", f"{name}_level_2") if column in columns]
-        leveled.append(f"{source} → {name}_level_1 (agrupado) + {name}_level_2 (raw) · {level_type}"
-                       + (" · ya generados" if len(made) == 2 else ""))
+    leveled = [f"{column_name} → {column_name}{GENERATED_LEVEL_SUFFIX} ({level_type})"
+               + (" · generado" if f"{column_name}{GENERATED_LEVEL_SUFFIX}" in present else "")
+               for column_name, level_type in configuration.leveled_dims.items()]
     if leveled:
         rows.append({"rol": LEVELED_ROLE, "columnas": len(leveled), "nombres": "; ".join(leveled),
-                     "para_que": "level_1: values grouped by their standardised rate (JSON in levels_path); collapsed before level_1"
-                                 .replace("collapsed before level_1", "the ladder collapses level_2 first, then level_1")})
+                     "para_que": "the column keeps its raw value (fine level); _level_1 groups its values by their standardised "
+                                 "rate (JSON in levels_path); the ladder collapses the fine level first"})
     return pd.DataFrame(rows)
 
 
@@ -232,10 +231,11 @@ class Config:
     flag_time_series_col: str = "flag_time_series"          # marks the rows of the time_series universe
 
     business_mandatory_dims: list = field(default_factory=list)       # open the series and the uplift cell
-    leveled_dims: dict = field(default_factory=dict)  # dims given two generated levels (step 02b): {name: {"source": raw
-                                                      # column (default: name), "type": "ordinal" | "nominal"}};
-                                                      # <name>_level_2 = the raw value, <name>_level_1 = values grouped
-                                                      # by their standardised renewal rate. The source must be mandatory
+    leveled_dims: dict = field(default_factory=dict)  # mandatory dims that get a generated coarse level (step 01b):
+                                                      # {column: "ordinal" | "nominal"}. The column keeps its raw value
+                                                      # (the fine level); <column>_level_1 groups its values by their
+                                                      # standardised renewal rate and is added to the mandatory dims
+                                                      # right after it, when the Config is built
     levels_path: Optional[str] = None                 # the JSON of the generated groups (None: <output_folder>/sff_levels.json);
                                                       # a later run reuses it; delete it to regenerate
     level_merge_max_pp: float = 5.0                   # two neighbouring values merge while their rates differ by at most this
@@ -377,7 +377,29 @@ class Config:
         if invalid_signs:
             raise ValueError(f"timevarying signs must be one of {VALID_TIMEVARYING_SIGNS}: {invalid_signs}")
 
-        # [2] no column declared with two roles (built and checked by column_roles), and
+        # [2] the leveled dims: mandatory, with a valid type; their generated level is a mandatory dim from
+        #     here on (step 01b creates it before any step reads the dims)
+        not_mandatory = [column_name for column_name in self.leveled_dims if column_name not in self.business_mandatory_dims]
+        if not_mandatory:
+            raise ValueError(f"leveled_dims must be mandatory dims: {not_mandatory}")
+        invalid_types = {column_name: level_type for column_name, level_type in self.leveled_dims.items()
+                         if level_type not in LEVEL_TYPES}
+        if invalid_types:
+            raise ValueError(f"leveled_dims types must be one of {LEVEL_TYPES}: {invalid_types}")
+        expanded = []
+        for column_name in self.business_mandatory_dims:
+            if column_name in self.generated_columns:
+                continue                                   # re-inserted right after its column
+            expanded.append(column_name)
+            if column_name in self.leveled_dims:
+                expanded.append(f"{column_name}{GENERATED_LEVEL_SUFFIX}")
+        self.business_mandatory_dims = expanded
+
+        # [3] the term of a licence is a declared mandatory dim (it exists in every step)
+        if self.term_column and self.term_column not in self.business_mandatory_dims:
+            raise ValueError(f"term_column '{self.term_column}' must be one of the mandatory dims")
+
+        # [4] no column declared with two roles (built and checked by column_roles), and
         #     the uplift cell takes its mandatory dims from the declared ones
         self.column_roles()
         unknown_uplift_dims = [column_name for column_name in (self.uplift_mandatory_dims or [])
@@ -385,7 +407,7 @@ class Config:
         if unknown_uplift_dims:
             raise ValueError(f"uplift_mandatory_dims must be mandatory dims: {unknown_uplift_dims}")
 
-        # [3] the calendar parameters are well formed
+        # [5] the calendar parameters are well formed
         if self.current_month is not None:
             parse_month(self.current_month)
         edges = list(self.discount_bucket_edges)
@@ -529,6 +551,17 @@ class Config:
             display(shown_table)
         else:
             print(shown_table.to_string())
+
+    @property
+    def generated_columns(self) -> list:
+        """The columns the library adds to the raw (step 01b): the coarse level of every leveled dim."""
+        return [f"{column_name}{GENERATED_LEVEL_SUFFIX}" for column_name in self.leveled_dims]
+
+    @property
+    def extract_mandatory_dims(self) -> list:
+        """The mandatory dims the extract brings (the steps that validate the extract, 00 and 01, read these;
+        from step 01b on, business_mandatory_dims, with the generated levels)."""
+        return [column_name for column_name in self.business_mandatory_dims if column_name not in self.generated_columns]
 
     @property
     def rate_series_columns(self) -> list:

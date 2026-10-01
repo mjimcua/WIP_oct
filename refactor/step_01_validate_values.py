@@ -203,11 +203,11 @@ def check_no_negatives(configuration: Config, check_log: list, rows: pd.DataFram
 
 def example_rows(rows: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     """The columns that identify a row and its money, to show a few rows under a check."""
-    return rows[[configuration.period_col] + configuration.business_mandatory_dims + configuration.core_measures]
+    return rows[[configuration.period_col] + configuration.extract_mandatory_dims + configuration.core_measures]
 
 
 def dimension_columns(configuration: Config) -> list:
     """Every dimension column, each once: mandatory, timevarying and both extra groups."""
-    all_dimensions = (configuration.business_mandatory_dims + list(configuration.structural_timevarying_dims)
+    all_dimensions = (configuration.extract_mandatory_dims + list(configuration.structural_timevarying_dims)
                       + configuration.extra_renovacion + configuration.extra_revalorizacion)
     return list(dict.fromkeys(all_dimensions))

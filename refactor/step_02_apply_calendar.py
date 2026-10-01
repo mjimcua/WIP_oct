@@ -125,10 +125,12 @@ def apply_calendar(validated: pd.DataFrame, configuration: Config) -> pd.DataFra
     wiped_pipeline_units = float(calendared.loc[not_known_yet, configuration.pipeline_units_col].sum())
     wiped_pipeline_usd = float(calendared.loc[not_known_yet, configuration.pipeline_usd_col].sum())
     calendared.loc[not_known_yet, [configuration.pipeline_units_col, configuration.pipeline_usd_col]] = 0.0
+    wiped_per_term = (calendared.loc[not_known_yet, configuration.term_column].astype(str).value_counts().to_dict()
+                      if configuration.term_column else "no term_column: every licence is treated as 1-year")
     configuration.log_action(STEP_LABEL, "4b", f"{int(not_known_yet.sum()):,} rows of 1-year licences due from "
                                             f"{boundaries['current'] + 12} on (sold or renewed from {boundaries['current']} on): "
                                             f"pipeline wiped {wiped_pipeline_units:,.0f} units · ${wiped_pipeline_usd:,.0f} "
-                                            f"(it will be projected)")
+                                            f"(it will be projected) · rows wiped per term: {wiped_per_term}")
 
     # [5] the checks
     configuration.log_action(STEP_LABEL, 5, "checking the calendar and the money")

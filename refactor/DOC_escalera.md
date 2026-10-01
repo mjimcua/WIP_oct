@@ -1,4 +1,4 @@
-# La escalera de soporte (pasos 02b, 09, 10 y 11)
+# La escalera de soporte (pasos 01b, 09, 10 y 11)
 
 ## Qué resuelve
 
@@ -58,18 +58,26 @@ El soporte que se informa en cada etapa es el del grupo con el que la serie pred
 
 El error de la tasa de un mes de `NA·A·tele` pasa de ±12,1 pp sola a ±3,9 pp con su composición (sesgo +3,4 pp).
 
-## Los niveles generados (paso 02b)
+## Los niveles generados (paso 01b)
 
-Las dimensiones declaradas en `leveled_dims` (por ejemplo `tr_term` y `tr_band`) reciben dos niveles:
+Las dimensiones declaradas en `leveled_dims` (por ejemplo `{"tr_term": "ordinal", "tr_band": "ordinal"}`) **conservan su
+nombre y su valor raw**, que es el nivel fino. La librería añade una sola columna, `<columna>_level_1`, con sus valores
+agrupados por la tasa estandarizada. La Config la cuenta como dimensión mandatory, justo detrás de su columna, desde que se
+construye; ningún paso la modifica después.
 
-- **`<name>_level_2`:** el valor raw, sin tocar;
-- **`<name>_level_1`:** los valores agrupados por su tasa estandarizada.
+**Cuándo:** justo después de validar el raw (pasos 00 y 01) y antes del calendario. El raw queda conformado una vez, al
+principio, y todos los pasos siguientes ven las mismas columnas. Los meses de entrenamiento salen del calendario de la
+Config (`current_month`, `test_months`), no del paso 02.
 
 **Cómo se forman los grupos:**
 1. Se usan solo los meses de entrenamiento.
 2. Cada valor se compara dentro de su celda, con el resto de mandatory iguales.
 3. Los valores con menos de 30 contratos al mes van a `residual`.
-4. Se juntan los vecinos más parecidos mientras su diferencia sea como mucho `level_merge_max_pp` (5 pp).
+4. Se juntan los vecinos más parecidos mientras su diferencia sea como mucho `level_merge_max_pp` (5 pp). `ordinal`:
+   solo valores contiguos, con los números comparados como números; `nominal`: cualquier par.
+
+**En la escalera:** una columna `X` es el nivel más fino de su familia cuando existe `X_level_N`, así que se colapsa
+primero `tr_term` y después `tr_term_level_1` (la misma regla de familias que `tr_product_level_2` → `tr_product_level_1`).
 
 **El JSON:**
 - La primera ejecución escribe los grupos en `levels_path` (por defecto `salida/sff_levels.json`).
