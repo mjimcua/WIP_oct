@@ -79,9 +79,9 @@ import pandas as pd
 from config import ACTIVE_FLAG_VALUES, Config, discount_bucket_labels, is_one_year, join_columns, parse_month
 from step_14_backtest import band_of_horizon
 from techniques import inverse_logit, logit, predict_logit
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, PATH_CONTRACT, PATH_STATISTICAL, PIPELINE_ORIGIN_COLUMN,
-                         PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_FROM_CELL,
-                         RATE_FROM_GLOBAL, RATE_FROM_POOL, ROLE_PROJECTION, SERIES_ID_COLUMN,
+from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, PATH_CONTRACT, PATH_STATISTICAL,
+                         PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_COLUMN,
+                         RATE_FROM_CELL, RATE_FROM_GLOBAL, RATE_FROM_POOL, ROLE_PROJECTION, SERIES_ID_COLUMN,
                          TABLE_BUSINESS_SUMMARY, TABLE_FORECAST, TABLE_FORECAST_MONTH, TRUTH_ROLES, UNIT_ID_COLUMN,
                          UPLIFT_CELL_ID_COLUMN)
 
@@ -361,11 +361,11 @@ def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, 
     """The rate of every estimation id at every future horizon, with the technique of its band,
     learning from every closed month of the id."""
     decision = backtest["decision"].set_index([ESTIMATION_ID_COLUMN, "tramo_h"])["tecnica"]
-    truth = pool_series[pool_series["rol"].isin(TRUTH_ROLES) & pool_series["tasa"].notna() & (pool_series["vencen"] > 0)]
+    truth = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & pool_series[RATE_COLUMN].notna() & (pool_series["vencen"] > 0)]
     rows = []
     for estimation_id, monthly in truth.groupby(ESTIMATION_ID_COLUMN):
         monthly = monthly.sort_values(configuration.period_col)
-        history = logit(monthly["tasa"].to_numpy(dtype=float))
+        history = logit(monthly[RATE_COLUMN].to_numpy(dtype=float))
         calendar_months = np.array([month.month for month in monthly[configuration.period_col]])
         for horizon in horizons:
             band_name = band_of_horizon(int(horizon), configuration.horizon_bands)
@@ -402,7 +402,7 @@ def rate_of_rows(future: pd.DataFrame, series_estimate: pd.DataFrame, pool_rates
     future["origen_tasa"] = np.where(pool_rate.notna(), RATE_FROM_POOL, None)
 
     # no pool: the rate of the mandatory cell, then the global rate (closed months)
-    truth = rated_units[rated_units[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & rated_units["tasa"].notna()].copy()
+    truth = rated_units[rated_units[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & rated_units[RATE_COLUMN].notna()].copy()
     truth["_celda"] = join_columns(truth, configuration.business_mandatory_dims)
     cell_rates = truth.groupby("_celda")[configuration.renewed_units_col].sum() / truth.groupby("_celda")[configuration.pipeline_units_col].sum()
     global_rate = truth[configuration.renewed_units_col].sum() / truth[configuration.pipeline_units_col].sum()

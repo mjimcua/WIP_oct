@@ -92,8 +92,8 @@ LEVEL_DEFINITIONS = [
     (LEVEL_FAR, "merged in a mandatory pass, or never reached the floor", "its group collapsed a mandatory dim"),
     (LEVEL_SIGNED_UNDER_FLOOR, "signed, its group never reached the floor", "the best rate of ITS sign, noisy: it may not mix with unsigned series"),
     (LEVEL_MIXED, "flags of both signs", "never merged: keeps its own rate; should be ≈ 0"),
-    (LEVEL_NO_HISTORY, "solo_futuro", "no rate to estimate: it will take a rate from its cell later"),
-    (LEVEL_NO_IMPACT, "solo_historia", "nothing to predict: kept for the groups and the backtest"),
+    (LEVEL_NO_HISTORY, ROUTE_FUTURE_ONLY, "no rate to estimate: it will take a rate from its cell later"),
+    (LEVEL_NO_IMPACT, ROUTE_HISTORY_ONLY, "nothing to predict: kept for the groups and the backtest"),
     (LEVEL_TIME_SERIES, "time_series universe", "labelled only: treated apart"),
 ]
 
@@ -120,7 +120,7 @@ def climb_the_ladder(series_rate: pd.DataFrame, ladder: dict, configuration: Con
     # [1] the final group and the reference of every estimable series
     groups = ladder["groups"]
     step_names = dict(zip(ladder["summary"]["ladder_step"], ladder["summary"]["step_name"]))
-    configuration.log_action(STEP_LABEL, 1, f"{len(groups):,} estimable series in {groups['final_group_id'].nunique():,} "
+    configuration.log_action(STEP_LABEL, 1, f"{len(groups):,} estimable series in {groups[ESTIMATION_ID_COLUMN].nunique():,} "
                                             f"final groups; {int(groups['credibility_ref_id'].notna().sum()):,} of them "
                                             f"with a credibility reference")
 
@@ -166,7 +166,7 @@ def credibility_k(groups: pd.DataFrame, configuration: Config) -> pd.Series:
     """Bühlmann-Straub k per reference, from the final groups that share it (one row per group):
     within = mean of p(1 − p); between = weighted variance of p minus its sampling part;
     k = within / between. Fewer than 3 groups: k_cred. No between variance: 10 × k_cred."""
-    siblings = groups.drop_duplicates("final_group_id").dropna(subset=["credibility_ref_id", "group_rate"]).copy()
+    siblings = groups.drop_duplicates(ESTIMATION_ID_COLUMN).dropna(subset=["credibility_ref_id", "group_rate"]).copy()
     siblings = siblings[siblings["group_support"] > 0]
     if siblings.empty:
         return pd.Series(dtype=float)
@@ -195,15 +195,15 @@ def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_referen
     estimate = series_rate.merge(groups, on=SERIES_ID_COLUMN, how="left")
 
     # a series that is not estimable is its own group, with its own rate
-    not_estimable = estimate["final_group_id"].isna()
-    estimate.loc[not_estimable, "final_group_id"] = estimate.loc[not_estimable, SERIES_ID_COLUMN]
+    not_estimable = estimate[ESTIMATION_ID_COLUMN].isna()
+    estimate.loc[not_estimable, ESTIMATION_ID_COLUMN] = estimate.loc[not_estimable, SERIES_ID_COLUMN]
     estimate.loc[not_estimable, "final_step"] = 0
     estimate.loc[not_estimable, "group_series"] = 1
     estimate.loc[not_estimable, "group_support"] = estimate.loc[not_estimable, "n_propio"]
     estimate.loc[not_estimable, "group_rate"] = estimate.loc[not_estimable, "tasa_propia"]
     estimate["final_step"] = estimate["final_step"].astype(int)
     estimate["group_series"] = estimate["group_series"].astype(int)
-    estimate[ESTIMATION_ID_COLUMN] = estimate["final_group_id"]
+    estimate[ESTIMATION_ID_COLUMN] = estimate[ESTIMATION_ID_COLUMN]
 
     group_rate, group_support = estimate["group_rate"], estimate["group_support"].fillna(0.0)
     reference_rate, reference_support = estimate["ref_rate"], estimate["ref_support"]
@@ -274,7 +274,7 @@ def check_ladder(estimate: pd.DataFrame, series_rate: pd.DataFrame, configuratio
                             context=f"{len(estimate):,} series")
 
     # [2] the group lends its rate: every series of a group has the same estimated rate
-    spread = estimate.dropna(subset=["tasa_estimada"]).groupby("final_group_id")["tasa_estimada"].agg(lambda rates: rates.max() - rates.min())
+    spread = estimate.dropna(subset=["tasa_estimada"]).groupby(ESTIMATION_ID_COLUMN)["tasa_estimada"].agg(lambda rates: rates.max() - rates.min())
     configuration.log_check(STEP_LABEL, check_log, "every series of a group has the same estimated rate",
                             bool((spread <= ROUNDING_TOLERANCE).all()),
                             failure_detail=f"{int((spread > ROUNDING_TOLERANCE).sum()):,} groups with different rates")

@@ -58,9 +58,9 @@ import numpy as np
 import pandas as pd
 
 from config import ID_FIELD_SEPARATOR, Config, id_text
-from vocabulario import (RATE_COLUMN, ROUTE_COLUMN, ROUTE_PREDICTABLE, SERIES_ID_COLUMN, SIGN_COLUMN, SIGN_MIXED,
-                         SIGN_NEUTRAL, SIGN_TOKEN, TABLE_LADDER_GROUPS, TABLE_LADDER_STEPS, TABLE_LADDER_SUMMARY,
-                         UNIVERSE_COLUMN, UNIVERSE_NORMAL, WILDCARD)
+from vocabulario import (ESTIMATION_ID_COLUMN, RATE_COLUMN, ROUTE_COLUMN, ROUTE_PREDICTABLE, SERIES_ID_COLUMN,
+                         SIGN_COLUMN, SIGN_MIXED, SIGN_NEUTRAL, SIGN_TOKEN, TABLE_LADDER_GROUPS, TABLE_LADDER_STEPS,
+                         TABLE_LADDER_SUMMARY, UNIVERSE_COLUMN, UNIVERSE_NORMAL, WILDCARD)
 
 
 STEP_LABEL = "10"
@@ -130,7 +130,7 @@ def build_ladder_groups(rated_units: pd.DataFrame, series_rate: pd.DataFrame, se
     # [5] the final groups and their references
     groups, reference_members = credibility_references(estimable, patterns, plan, final, history, configuration)
     with_reference = groups["credibility_ref_id"].notna()
-    configuration.log_action(STEP_LABEL, 5, f"{groups['final_group_id'].nunique():,} final groups · "
+    configuration.log_action(STEP_LABEL, 5, f"{groups[ESTIMATION_ID_COLUMN].nunique():,} final groups · "
                                             f"{int(with_reference.sum()):,} series take a credibility reference "
                                             f"({reference_members['credibility_ref_id'].nunique():,} references)")
 
@@ -270,7 +270,7 @@ def run_the_passes(estimable: pd.DataFrame, patterns: pd.DataFrame, plan: list, 
             "pct_usd_own_rate": float(usd_to_predict[support_of_series >= configuration.own_rate_floor].sum() / total_usd)
                                 if total_usd else np.nan})
     steps = pd.concat(step_rows, ignore_index=True)
-    final = pd.DataFrame({"final_group_id": group, "final_step": assigned_at,
+    final = pd.DataFrame({ESTIMATION_ID_COLUMN: group, "final_step": assigned_at,
                           "closed": group.map(support_of_groups(history, group, configuration)["support"]).fillna(0.0)
                                     >= floor - SUPPORT_TOLERANCE})
     return steps, pd.DataFrame(summary_rows), final
@@ -285,7 +285,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
     """The final group of every series with its support and rate, and, below the own-rate floor,
     its credibility reference with its support and rate; and the members of every reference."""
     floor, own_rate_floor = configuration.support_floor, configuration.own_rate_floor
-    groups_support = support_of_groups(history, final["final_group_id"], configuration)
+    groups_support = support_of_groups(history, final[ESTIMATION_ID_COLUMN], configuration)
     not_mixed = estimable[SIGN_COLUMN] != SIGN_MIXED
 
     # every pattern of every pass, counted over ALL the series (the closed and the big ones too)
@@ -295,7 +295,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
         all_patterns[step["step"]] = support_of_groups(history, pattern_of_series, configuration)
 
     group_rows = []
-    for group_id, members in final.groupby("final_group_id"):
+    for group_id, members in final.groupby(ESTIMATION_ID_COLUMN):
         group_support = float(groups_support.loc[group_id, "support"]) if group_id in groups_support.index else 0.0
         group_series = int(len(members))
         first_member = members.index[0]
@@ -315,7 +315,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
                         break
             if widest is not None:
                 chosen_step, chosen_id = widest
-        row = {"final_group_id": group_id, "final_step": int(members["final_step"].iloc[0]),
+        row = {ESTIMATION_ID_COLUMN: group_id, "final_step": int(members["final_step"].iloc[0]),
                "group_series": group_series, "group_support": group_support,
                "group_rate": float(groups_support.loc[group_id, "rate"]) if group_id in groups_support.index else np.nan,
                "credibility_ref_id": chosen_id, "credibility_ref_step": chosen_step}
@@ -328,7 +328,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
         if column_name not in by_group.columns:
             by_group[column_name] = np.nan
 
-    groups = final[["final_group_id"]].reset_index().merge(by_group, on="final_group_id", how="left")
+    groups = final[[ESTIMATION_ID_COLUMN]].reset_index().merge(by_group, on=ESTIMATION_ID_COLUMN, how="left")
     reference_rows = []
     for (ref_step, ref_id), _ in by_group.dropna(subset=["credibility_ref_id"]).groupby(["credibility_ref_step", "credibility_ref_id"]):
         members = patterns.index[(patterns[int(ref_step)] == ref_id) & not_mixed]
@@ -371,7 +371,7 @@ def check_the_ladder(steps: pd.DataFrame, summary: pd.DataFrame, groups: pd.Data
                             failure_detail=f"{len(reopened):,} series left a closed group · groups by pass {summary['groups'].tolist()}")
 
     # [4] a reference is wider than its group
-    with_reference = groups.dropna(subset=["credibility_ref_id"]).drop_duplicates("final_group_id")
+    with_reference = groups.dropna(subset=["credibility_ref_id"]).drop_duplicates(ESTIMATION_ID_COLUMN)
     narrower = with_reference[with_reference["ref_series"] <= with_reference["group_series"]]
     configuration.log_check(STEP_LABEL, check_log, "every credibility reference has more series than its group", narrower.empty,
                             failure_detail=f"{len(narrower):,} references not wider than their group",

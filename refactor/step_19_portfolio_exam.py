@@ -48,8 +48,9 @@ import pandas as pd
 from config import Config, join_columns
 from step_14_backtest import band_of_horizon
 from techniques import inverse_logit, logit, predict_logit
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, METHOD_FRAMEWORK, ROLE_TEST, SERIES_ID_COLUMN,
-                         SYNTHETIC_COLUMN, TABLE_PORTFOLIO_EXAM, TABLE_PORTFOLIO_EXAM_SUMMARY, TRUTH_ROLES)
+from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, METHOD_FRAMEWORK, RATE_COLUMN, ROLE_TEST,
+                         SERIES_ID_COLUMN, SYNTHETIC_COLUMN, TABLE_PORTFOLIO_EXAM, TABLE_PORTFOLIO_EXAM_SUMMARY,
+                         TRUTH_ROLES)
 
 
 STEP_LABEL = "19"
@@ -91,7 +92,7 @@ def examine_portfolio(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, 
     real = real.merge(series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "z", "credibility_ref_id"]],
                       on=SERIES_ID_COLUMN, how="left")
     decision = backtest["decision"].set_index([ESTIMATION_ID_COLUMN, "tramo_h"])["tecnica"]
-    pool_truth = pool_series[pool_series["rol"].isin(TRUTH_ROLES) & pool_series["tasa"].notna() & (pool_series["vencen"] > 0)]
+    pool_truth = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & pool_series[RATE_COLUMN].notna() & (pool_series["vencen"] > 0)]
     pool_ids = set(pool_truth[ESTIMATION_ID_COLUMN])
 
     rows, latest_month_used = [], []
@@ -178,7 +179,7 @@ def framework_rates(month_rows: pd.DataFrame, known: pd.DataFrame, pool_truth: p
         if len(history) < 3:
             continue
         technique = decision.get((estimation_id, band_name), configuration.challenger_technique)
-        rates = history["tasa"].to_numpy(dtype=float)
+        rates = history[RATE_COLUMN].to_numpy(dtype=float)
         months = np.array([month.month for month in history[period_column]])
         value = predict_logit(technique, logit(rates), months, int(horizon))
         if not np.isfinite(value):

@@ -39,8 +39,8 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, GATE_SUPPORT,
-                         RATE_COLUMN, SERIES_ID_COLUMN, TABLE_POOL_REFERENCE, TABLE_POOL_SERIES)
+from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, GATE_SUPPORT, RATE_COLUMN,
+                         SERIES_ID_COLUMN, TABLE_POOL_REFERENCE, TABLE_POOL_SERIES)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: 
     period_column = configuration.period_col
 
     # [1] the final groups of step 10 (the estimable series) and their series: a partition
-    membership = ladder["groups"][[SERIES_ID_COLUMN, "final_group_id"]].rename(columns={"final_group_id": ESTIMATION_ID_COLUMN})
+    membership = ladder["groups"][[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN]].rename(columns={ESTIMATION_ID_COLUMN: ESTIMATION_ID_COLUMN})
     chosen = series_estimate[series_estimate[SERIES_ID_COLUMN].isin(set(membership[SERIES_ID_COLUMN]))]
     chosen_ids = set(membership[ESTIMATION_ID_COLUMN])
     configuration.log_action(STEP_LABEL, 1, f"{len(chosen_ids):,} final groups of {len(chosen):,} series "
@@ -85,7 +85,7 @@ def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: 
                         vencen=(configuration.pipeline_units_col, "sum"),
                         series_en_el_mes=(SERIES_ID_COLUMN, "nunique"))
                    .reset_index().sort_values([ESTIMATION_ID_COLUMN, period_column]).reset_index(drop=True))
-    pool_series["tasa"] = pool_series["renovadas"] / pool_series["vencen"].where(pool_series["vencen"] > 0)
+    pool_series[RATE_COLUMN] = pool_series["renovadas"] / pool_series["vencen"].where(pool_series["vencen"] > 0)
     configuration.log_action(STEP_LABEL, 2, f"{len(pool_series):,} group × month rows; a group has "
                                             f"{pool_series.groupby(ESTIMATION_ID_COLUMN).size().median():.0f} months (median)")
 
@@ -102,15 +102,15 @@ def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: 
     configuration.log_check(STEP_LABEL, check_log, "every final group has a monthly series", not missing_ids,
                             failure_detail=f"{len(missing_ids):,} ids without months: {sorted(missing_ids)[:5]}",
                             context=f"{len(chosen_ids):,} ids")
-    support_in_step_10 = (ladder["groups"].drop_duplicates("final_group_id")
-                          .set_index("final_group_id")["group_support"].rename("n_pool_paso_10"))
+    support_in_step_10 = (ladder["groups"].drop_duplicates(ESTIMATION_ID_COLUMN)
+                          .set_index(ESTIMATION_ID_COLUMN)["group_support"].rename("n_pool_paso_10"))
     compared = pool_reference.join(support_in_step_10, on=ESTIMATION_ID_COLUMN)
     mismatched = compared[(compared["n_pool"] - compared["n_pool_paso_10"]).abs() > SUPPORT_TOLERANCE]
     configuration.log_check(STEP_LABEL, check_log, "the support of every group equals its support in step 10",
                             mismatched.empty,
                             failure_detail=f"{len(mismatched):,} groups whose support differs from step 10",
                             examples=mismatched[[ESTIMATION_ID_COLUMN, "n_pool", "n_pool_paso_10"]])
-    out_of_range = pool_series[(pool_series["tasa"] < 0) | (pool_series["tasa"] > 1)]
+    out_of_range = pool_series[(pool_series[RATE_COLUMN] < 0) | (pool_series[RATE_COLUMN] > 1)]
     configuration.log_check(STEP_LABEL, check_log, "every monthly rate is between 0 and 1", out_of_range.empty,
                             failure_detail=f"{len(out_of_range):,} months with a rate outside [0, 1]", blocking=False,
                             examples=out_of_range)

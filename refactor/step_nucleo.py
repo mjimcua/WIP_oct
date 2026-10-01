@@ -53,11 +53,14 @@ import numpy as np
 import pandas as pd
 
 from config import Config, join_columns
-from vocabulario import (TRUTH_ROLES as TRUTH_ROLES_OF_CORE, S0_PIPELINE_UNITS_COLUMN, S0_PIPELINE_USD_COLUMN, CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN, ESTIMATION_ID_COLUMN,
-                         FINE_ROWS_COLUMN, ROLE_TEST, ROLE_TRAIN, ROUTE_COLUMN, ROW_FROM_GAP, ROW_FROM_RAW,
-                         ROW_ORIGIN_COLUMN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
-                         SERIES_ID_COLUMN, SIGN_COLUMN, SYNTHETIC_COLUMN, TABLE_CORE, TABLE_CORE_LEGEND,
-                         UNIT_ID_COLUMN, UNIVERSE_COLUMN, UPLIFT_CELL_ID_COLUMN)
+from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN, ESTIMATION_ID_COLUMN,
+                         FINE_ROWS_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_SIMULATED, ROLE_TEST,
+                         ROLE_TRAIN, ROUTE_COLUMN, ROW_FROM_GAP, ROW_FROM_RAW, ROW_ORIGIN_COLUMN,
+                         S0_PIPELINE_UNITS_COLUMN, S0_PIPELINE_USD_COLUMN, S0_RENEWED_UNITS_COLUMN,
+                         S0_RENEWED_USD_COLUMN, SERIES_ID_COLUMN, SIGN_COLUMN, SYNTHETIC_COLUMN, TABLE_CORE,
+                         TABLE_CORE_LEGEND, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_RENEWED,
+                         TOTAL_ORIGIN_SIMULATED, TOTAL_ORIGIN_TOTAL, TS_PROJECTED, TS_REAL, TS_REENTRY,
+                         UNIT_ID_COLUMN, UNIVERSE_COLUMN, UPLIFT_CELL_ID_COLUMN, TRUTH_ROLES as TRUTH_ROLES_OF_CORE)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -97,7 +100,7 @@ CALENDAR_MEASURES = [("s02_vencen_unidades", "02", "units due after the calendar
                      ("s02_renovado_usd", "02", "renewed USD after the calendar: null → 0 in closed months, wiped from the current month on")]
 
 # steps 15-17, per FUTURE ROW (a value of the row: the money columns add up)
-ROW_VALUES_STEP_17 = [("origen_pipeline", "s17_origen_pipeline", "17", "real (extract) · proyectada · simulada"),
+ROW_VALUES_STEP_17 = [(PIPELINE_ORIGIN_COLUMN, "s17_origen_pipeline", "17", "real (extract) · proyectada · simulada"),
                       ("_vencen_unidades", "s17_vencen_unidades", "17", "units due of the future row: the extract's or the extended horizon's (SUM)"),
                       ("_vencen_usd", "s17_vencen_usd", "17", "USD due of the future row: the extract's or the extended horizon's (SUM)"),
                       ("h", "s17_h", "17", "months from the last closed month"),
@@ -213,9 +216,9 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
             core = add_block(core, block_frame, SERIES_ID_COLUMN, "s03_fs_id", block_specs)
             blocks_present.append(block_specs)
     if pool_dynamics is not None and len(pool_dynamics) and "s11_final_group_id" in core.columns:
-        dynamics_values = pool_dynamics[["final_group_id"] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
+        dynamics_values = pool_dynamics[[ESTIMATION_ID_COLUMN] + [source for source, _, _, _ in ESTIMATION_VALUES_STEP_13]]
         dynamics_values = dynamics_values.rename(columns={source: name for source, name, _, _ in ESTIMATION_VALUES_STEP_13})
-        core = core.merge(dynamics_values, left_on="s11_final_group_id", right_on="final_group_id", how="left").drop(columns="final_group_id")
+        core = core.merge(dynamics_values, left_on="s11_final_group_id", right_on=ESTIMATION_ID_COLUMN, how="left").drop(columns=ESTIMATION_ID_COLUMN)
         blocks_present.append(ESTIMATION_VALUES_STEP_13)
     if technique_decision is not None and "s11_final_group_id" in core.columns:
         core, backtest_specs = add_backtest_block(core, technique_decision, exam_by_pool, configuration)
@@ -270,11 +273,11 @@ def add_block(core: pd.DataFrame, block_frame: pd.DataFrame, key_column: str, co
 def add_backtest_block(core: pd.DataFrame, technique_decision: pd.DataFrame, exam_by_pool: pd.DataFrame,
                        configuration: Config) -> tuple:
     """The chosen technique and the exam error of the row's estimation id, one column per horizon band."""
-    per_band = technique_decision[["final_group_id", "tramo_h", "tecnica", "tecnica_origen"]]
+    per_band = technique_decision[[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]]
     if exam_by_pool is not None:
-        per_band = per_band.merge(exam_by_pool[["final_group_id", "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio",
-                                                "dentro_banda"]], on=["final_group_id", "tramo_h"], how="left")
-    wide = per_band.pivot(index="final_group_id", columns="tramo_h")
+        per_band = per_band.merge(exam_by_pool[[ESTIMATION_ID_COLUMN, "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio",
+                                                "dentro_banda"]], on=[ESTIMATION_ID_COLUMN, "tramo_h"], how="left")
+    wide = per_band.pivot(index=ESTIMATION_ID_COLUMN, columns="tramo_h")
     specs = []
     renamed = {}
     for source, name, step, description in ESTIMATION_VALUES_STEP_14:
@@ -293,7 +296,7 @@ FINAL_UNIVERSE_COLUMN = "fin_universo"
 FINAL_ORIGIN_COLUMN = "fin_origen"
 FINAL_STATE_COLUMN = "fin_estado"
 FINAL_YEAR_COLUMN = "fin_ano"
-UNIVERSE_PIPELINE, UNIVERSE_TIME_SERIES = "pipeline", "time_series"
+FINAL_UNIVERSE_PIPELINE, FINAL_UNIVERSE_TIME_SERIES = "pipeline", "time_series"
 STATE_REAL, STATE_EXPECTED = "real", "previsto"
 TS_WITHOUT_RESULT = "ts_sin_resultado"       # an original time_series row of a month not closed yet (its result is projected)
 FINAL_VALUES = [
@@ -325,7 +328,7 @@ def rows_of_the_time_series(time_series_rows, time_series_table, core_columns, c
             if column_name in time_series_rows.columns and column_name not in original.columns:
                 original[column_name] = time_series_rows[column_name].to_numpy()
         closed = original[configuration.period_col] < current
-        original[ROW_ORIGIN_COLUMN] = np.where(closed, "ts_real", TS_WITHOUT_RESULT)
+        original[ROW_ORIGIN_COLUMN] = np.where(closed, TS_REAL, TS_WITHOUT_RESULT)
         original["s00_vencen_unidades"] = time_series_rows[configuration.pipeline_units_col].fillna(0).to_numpy()
         original["s00_vencen_usd"] = time_series_rows[configuration.pipeline_usd_col].fillna(0).to_numpy()
         original["s00_renovadas_unidades"] = time_series_rows[configuration.renewed_units_col].fillna(0).to_numpy()
@@ -336,7 +339,7 @@ def rows_of_the_time_series(time_series_rows, time_series_table, core_columns, c
         original["_ts_usd"] = np.where(closed, original["s00_renovado_usd"], 0.0)
         frames.append(original)
     if time_series_table is not None and len(time_series_table):
-        synthetic = time_series_table[time_series_table["origen"].isin(["ts_proyectado", "ts_reentrada"])]
+        synthetic = time_series_table[time_series_table["origen"].isin([TS_PROJECTED, TS_REENTRY])]
         rows = pd.DataFrame({ROW_ORIGIN_COLUMN: synthetic["origen"].to_numpy(),
                              configuration.period_col: synthetic[configuration.period_col].to_numpy()})
         for column_name in core_columns:
@@ -345,7 +348,7 @@ def rows_of_the_time_series(time_series_rows, time_series_table, core_columns, c
         for measure_name, _, _ in RAW_MEASURES:
             rows[measure_name] = 0.0
         rows["s02_rol"] = configuration.role_of_months(rows[configuration.period_col])
-        reentry = (synthetic["origen"] == "ts_reentrada").to_numpy()
+        reentry = (synthetic["origen"] == TS_REENTRY).to_numpy()
         rows["_ts_vence_unidades"] = np.where(reentry, synthetic["unidades"].to_numpy(), 0.0)
         rows["_ts_vence_usd"] = np.where(reentry, synthetic["valor"].to_numpy(), 0.0)      # the pipeline: value at 40 % off
         rows["_ts_renovadas"] = np.where(reentry, synthetic.get("unidades_renovadas", pd.Series(0.0, index=synthetic.index)).fillna(0).to_numpy(),
@@ -366,13 +369,13 @@ def add_final_block(core: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     column = lambda name: core[name].fillna(0.0) if name in core.columns else zeros
 
     raw_closed, raw_future = (origin == ROW_FROM_RAW) & closed, (origin == ROW_FROM_RAW) & ~closed
-    extended = origin.isin(["proyectada", "simulada"])
-    core[FINAL_UNIVERSE_COLUMN] = np.where(is_time_series, UNIVERSE_TIME_SERIES, UNIVERSE_PIPELINE)
+    extended = origin.isin([PIPELINE_PROJECTED, PIPELINE_SIMULATED])
+    core[FINAL_UNIVERSE_COLUMN] = np.where(is_time_series, FINAL_UNIVERSE_TIME_SERIES, FINAL_UNIVERSE_PIPELINE)
     core[FINAL_ORIGIN_COLUMN] = np.select(
-        [raw_closed, raw_future, origin == "proyectada", origin == "simulada", origin == ROW_FROM_GAP],
-        ["pipeline_renovado_real", "pipeline_real_esperado", "pipeline_proyectada", "pipeline_simulada", "hueco"],
+        [raw_closed, raw_future, origin == PIPELINE_PROJECTED, origin == PIPELINE_SIMULATED, origin == ROW_FROM_GAP],
+        [TOTAL_ORIGIN_RENEWED, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_SIMULATED, ROW_FROM_GAP],
         default=origin.astype(str))
-    core[FINAL_STATE_COLUMN] = np.where(raw_closed | (origin == ROW_FROM_GAP) | origin.isin(["ts_real", TS_WITHOUT_RESULT]),
+    core[FINAL_STATE_COLUMN] = np.where(raw_closed | (origin == ROW_FROM_GAP) | origin.isin([TS_REAL, TS_WITHOUT_RESULT]),
                                         STATE_REAL, STATE_EXPECTED)
     core[FINAL_YEAR_COLUMN] = core[configuration.period_col].map(lambda month: month.year)
 
@@ -435,7 +438,7 @@ def rows_of_the_extension(forecast: pd.DataFrame, core_columns, configuration: C
     extension = forecast[forecast["_fila"].isna()]
     if extension.empty:
         return pd.DataFrame(columns=core_columns)
-    rows = pd.DataFrame({ROW_ORIGIN_COLUMN: extension["origen_pipeline"].to_numpy(),
+    rows = pd.DataFrame({ROW_ORIGIN_COLUMN: extension[PIPELINE_ORIGIN_COLUMN].to_numpy(),
                          configuration.period_col: extension[configuration.period_col].to_numpy()})
     for column_name in core_columns:
         if column_name in extension.columns and column_name not in rows.columns and not column_name.startswith("s"):
@@ -524,7 +527,7 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
                             context=" · ".join(f"{origin} {count:,}" for origin, count in origin_counts.items()))
 
     # [2] the money of the pipeline reconciles with the extract (the time_series rows are apart)
-    pipeline_rows = core[FINAL_UNIVERSE_COLUMN] == UNIVERSE_PIPELINE
+    pipeline_rows = core[FINAL_UNIVERSE_COLUMN] == FINAL_UNIVERSE_PIPELINE
     reconciliation = {"s00_vencen_unidades": fine_table[S0_PIPELINE_UNITS_COLUMN].sum(),
                       "s00_vencen_usd": fine_table[S0_PIPELINE_USD_COLUMN].sum(),
                       "s02_vencen_unidades": fine_table[configuration.pipeline_units_col].sum(),
@@ -563,7 +566,7 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
         configuration.log_not_evaluated(STEP_LABEL, check_log, "the core summed by year and origin = sff_forecast_total",
                                         "step 20 has not run")
         return
-    parts = forecast_total[forecast_total["origen"] != "TOTAL"].set_index(["ano", "origen"])
+    parts = forecast_total[forecast_total["origen"] != TOTAL_ORIGIN_TOTAL].set_index(["ano", "origen"])
     summed = core.groupby([FINAL_YEAR_COLUMN, FINAL_ORIGIN_COLUMN])[["fin_vence_usd", "fin_renovado_usd"]].sum()
     summed.index = summed.index.set_names(["ano", "origen"])
     compared = parts.join(summed, how="left").fillna(0.0)

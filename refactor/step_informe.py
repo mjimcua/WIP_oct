@@ -40,9 +40,10 @@ import numpy as np
 import pandas as pd
 
 from config import Config, UNKNOWN_DISCOUNT_BUCKET
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, LEVEL_OWN, PURPOSE_SELECTION, REPORT_FILE_NAME,
-                         ROLE_PROJECTION, ROLES_IN_ORDER, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
-                         SERIES_ID_COLUMN, SYNTHETIC_COLUMN, TABLE_SERIES_CARD, TRUTH_ROLES)
+from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, LEVEL_OWN,
+                         METHOD_FRAMEWORK, PURPOSE_SELECTION, REPORT_FILE_NAME, ROLES_IN_ORDER, ROLE_PROJECTION,
+                         S0_PIPELINE_USD_COLUMN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN, SERIES_ID_COLUMN,
+                         SYNTHETIC_COLUMN, TABLE_SERIES_CARD, TOTAL_ORIGIN_TOTAL, TRUTH_ROLES, UPLIFT_CELL_ID_COLUMN)
 
 
 # ─── the step ────────────────────────────────────────────────────────────────────
@@ -146,7 +147,7 @@ def build_report(raw: pd.DataFrame, results: dict, configuration: Config) -> pd.
 def series_card(results: dict, configuration: Config) -> pd.DataFrame:
     """One row per series: route, support, own rate, ladder, estimate, level, the dynamics and
     the chosen techniques of its estimation id, and their exam error."""
-    card = results["series_estimate"].merge(results["series"][[SERIES_ID_COLUMN, "cobertura", "primer_mes", "ultimo_mes"]],
+    card = results["series_estimate"].merge(results["series"][[SERIES_ID_COLUMN, COVERAGE_COLUMN, "primer_mes", "ultimo_mes"]],
                                             on=SERIES_ID_COLUMN, how="left")
     dynamics = results.get("pool_dynamics")
     if dynamics is not None and len(dynamics):
@@ -204,7 +205,7 @@ def chapter_raw(raw: pd.DataFrame, results: dict, configuration: Config) -> str:
              f"{early[S0_RENEWED_UNITS_COLUMN].sum():,.0f} unidades y ${early[S0_RENEWED_USD_COLUMN].sum():,.0f}. "
              f"El raw original queda en las columnas s0_.",
              ]
-    wiped_pipeline = fine["s0_vencen_usd"] - fine[configuration.pipeline_usd_col]
+    wiped_pipeline = fine[S0_PIPELINE_USD_COLUMN] - fine[configuration.pipeline_usd_col]
     lines.append(f"- Pipeline de licencias de 1 año vendidas o renovadas desde el mes en curso (vence desde "
                  f"{boundaries['current'] + 12}): **aún no se conoce**, se borra y se proyecta: **{int((wiped_pipeline != 0).sum()):,} "
                  f"filas**, ${wiped_pipeline.sum():,.0f} (el raw la conserva en s0_vencen_*).")
@@ -265,12 +266,18 @@ def chapter_support(results: dict, configuration: Config, headline: list) -> str
              "La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila por azar "
              "(error binomial √(p(1−p)/n)). Con **30** contratos al mes una serie tiene evidencia para prestar; con **271** "
              "su tasa se conoce a ±5 pp y puede ir sola. **Antes**: cada serie con su propio soporte. **Después**: la "
-             "escalera le presta el soporte del pariente más cercano que tiene suficiente, con credibilidad.", "",
+             "escalera junta las series pasada a pasada (signo, extras y dimensiones mandatory en el orden de colapso) hasta "
+             "que cada grupo llega a 30; el grupo presta su tasa a sus series y, por debajo de 271, la mezcla con la de una "
+             "referencia más amplia por credibilidad. Ver `DOC_escalera.md`.", "",
              "**Antes · el dinero por soporte propio (el dial):**", "", markdown_table(before),
              "**Antes y después · el error con el que se CONOCE la tasa de cada serie** (antes: su error binomial con su "
              "propio soporte; después: el error de la estimación de la escalera). La predicción de un mes concreto conserva "
              "además el ruido de su propio tamaño, que ninguna escalera elimina: está en el nivel de riesgo.", "",
              markdown_table(comparison, 1),
+             "**Pasada a pasada · cómo mejora el soporte** (cada pasada es un reparto: las unidades que vencen suman lo "
+             "mismo en todas; los grupos son menos y más grandes; pct_usd_floor / pct_usd_own_rate: dinero por predecir en "
+             "grupos que llegan a 30 / a 271):", "",
+             markdown_table(results["ladder"]["summary"], 2) if results.get("ladder") else "",
              "**Después · el dinero por nivel de riesgo** (error_pp: error de predicción del mes siguiente, ponderado por dinero):", "",
              markdown_table(levels)]
     return "\n".join(lines) + "\n"
@@ -309,7 +316,7 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
                                                        backtest["exam_by_pool"], backtest["exam_total"])
     boundaries = configuration.calendar_boundaries()
     reference = results["pool_reference"]
-    judged_share = (reference.loc[reference["gate"] == "nivel", "usd_por_predecir"].sum()
+    judged_share = (reference.loc[reference["gate"] == GATE_LEVEL, "usd_por_predecir"].sum()
                     / max(reference["usd_por_predecir"].sum(), 1))
 
     exam_by_band = exam_by_pool.merge(reference[[ESTIMATION_ID_COLUMN, "usd_por_predecir"]], on=ESTIMATION_ID_COLUMN)
@@ -337,8 +344,8 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     portfolio_summary = results.get("portfolio_exam_summary")
     if portfolio_summary is not None:
         for horizon, block in portfolio_summary.groupby("h"):
-            framework = block[block["metodo"] == "framework"].iloc[0]
-            spreadsheet = block[block["metodo"] != "framework"].sort_values("error_total_medio").iloc[0]
+            framework = block[block["metodo"] == METHOD_FRAMEWORK].iloc[0]
+            spreadsheet = block[block["metodo"] != METHOD_FRAMEWORK].sort_values("error_total_medio").iloc[0]
             headline.append((f"error del TOTAL en el examen, h = {horizon}: framework vs mejor hoja de cálculo",
                              f"{framework['error_total_medio']:.1%} vs {spreadsheet['error_total_medio']:.1%} ({spreadsheet['metodo']})"))
     if len(by_band):
@@ -377,7 +384,7 @@ def chapter_uplift(results: dict, configuration: Config) -> str:
     comparison, verdict = results.get("uplift_backtest"), results.get("uplift_verdict")
     if cells is None:
         return "## 6 · La revalorización\n\n_(pasos 15-16 no ejecutados)_\n"
-    by_origin = cells.groupby("uplift_origen").agg(celdas=("uplift_cell_id", "size"), uplift_medio=("uplift", "mean"),
+    by_origin = cells.groupby("uplift_origen").agg(celdas=(UPLIFT_CELL_ID_COLUMN, "size"), uplift_medio=("uplift", "mean"),
                                                    renovadores=("renovadores", "sum")).reset_index()
     lines = ["## 6 · La revalorización: a qué precio se renueva", "",
              "El uplift es lo que paga quien renueva respecto a lo que vencía (1,00 = mismo precio). Dos vías: la "
@@ -424,7 +431,7 @@ def chapter_forecast(results: dict, configuration: Config, headline: list) -> st
              "**De dónde sale la tasa de las filas futuras:**", "", markdown_table(origins, 0)]
     total = results.get("forecast_total")
     if total is not None and len(total):
-        for _, row in total[total["origen"] == "TOTAL"].iterrows():
+        for _, row in total[total["origen"] == TOTAL_ORIGIN_TOTAL].iterrows():
             headline.append((f"TOTAL {int(row['ano'])} renovado + revenue time_series (pipeline {row['usd_vence']:,.0f} $)",
                              f"${row['usd_renovado']:,.0f}"))
         lines += ["**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `fin_ano` y `fin_origen`, "
@@ -445,7 +452,7 @@ def chapter_forecast(results: dict, configuration: Config, headline: list) -> st
 def chapter_card_and_next(card: pd.DataFrame) -> str:
     lines = ["## 8 · La ficha de cada serie y lo que falta", "",
              f"`sff_ficha_serie` tiene una fila por serie ({len(card):,}) con todo lo que el framework sabe de ella: ruta, "
-             "soporte y tasa propios, pariente, credibilidad, tasa estimada y sus dos errores, nivel de riesgo, la dinámica y "
+             "soporte y tasa propios, grupo final y su referencia, credibilidad, tasa estimada y sus dos errores, nivel de riesgo, la dinámica y "
              "las técnicas de su id de estimación y su error en el examen. `sff_nucleo` tiene la misma información fila a fila "
              "con los meses (en Power BI: seleccionar `s03_fs_id`).", "",
              "**Lo que falta** (siguientes pasos): el horizonte extendido (reentradas de 2026 y captación simulada de 2027, "
