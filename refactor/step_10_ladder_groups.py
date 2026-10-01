@@ -25,7 +25,20 @@ is in one group, and the totals by group always add up to the raw.
   · support of a group = the median, over its months with something due, of the units due
     summed over its series
 
-THE FINAL GROUP of a series is its id after the last pass. The group lends its rate to every
+AN ID ONLY CHANGES WHEN THE GROUP CHANGES: when a pass sets one more dim to '*' but the group
+keeps exactly the same series, it keeps the id it had. So reading the ids pass after pass, an id
+changes only where the series really joined others.
+
+THE STAGES: the passes are summarised in the 4 stages business reads (one column pair per stage
+in the core, stage_id and stage_support):
+  stage 0  raw      the forecast series itself (its gaps filled)
+  stage 1  sign     after the sign pass
+  stage 2  extras   after the last extra pass
+  stage 3  collapse after the last mandatory pass: the COMPOSITION, what is predicted
+  (stage 4, credibility, is step 11: it blends rates, it does not merge series)
+A stage that adds nothing repeats the id and the support of the stage before it.
+
+THE COMPOSITION of a series is its id after the last pass. The group lends its rate to every
 series in it (step 11). A final group below own_rate_floor (271) gets a CREDIBILITY REFERENCE:
 a wider group whose rate is blended with the group's own, z = n / (n + k). The reference is the
 first of these candidates that has more series than the group and reaches support_floor
@@ -58,7 +71,7 @@ import numpy as np
 import pandas as pd
 
 from config import ID_FIELD_SEPARATOR, Config, id_text
-from vocabulario import (ESTIMATION_ID_COLUMN, RATE_COLUMN, ROUTE_COLUMN, ROUTE_PREDICTABLE, SERIES_ID_COLUMN,
+from vocabulario import (COMPOSITION_ID_COLUMN, RATE_COLUMN, ROUTE_COLUMN, ROUTE_PREDICTABLE, SERIES_ID_COLUMN,
                          SIGN_COLUMN, SIGN_MIXED, SIGN_NEUTRAL, SIGN_TOKEN, TABLE_LADDER_GROUPS, TABLE_LADDER_STEPS,
                          TABLE_LADDER_SUMMARY, UNIVERSE_COLUMN, UNIVERSE_NORMAL, WILDCARD)
 
@@ -123,6 +136,7 @@ def build_ladder_groups(rated_units: pd.DataFrame, series_rate: pd.DataFrame, se
 
     # [4] the passes
     steps, summary, final = run_the_passes(estimable, patterns, plan, history, configuration)
+    stages = stages_of_the_series(steps, plan)
     configuration.log_action(STEP_LABEL, 4, f"{summary['ladder_step'].max() + 1} passes run · groups "
                                             f"{summary['groups'].iloc[0]:,} → {summary['groups'].iloc[-1]:,} · "
                                             f"closed at the end: {int(final['closed'].sum()):,} of {len(final):,} series")
@@ -130,7 +144,7 @@ def build_ladder_groups(rated_units: pd.DataFrame, series_rate: pd.DataFrame, se
     # [5] the final groups and their references
     groups, reference_members = credibility_references(estimable, patterns, plan, final, history, configuration)
     with_reference = groups["credibility_ref_id"].notna()
-    configuration.log_action(STEP_LABEL, 5, f"{groups[ESTIMATION_ID_COLUMN].nunique():,} final groups · "
+    configuration.log_action(STEP_LABEL, 5, f"{groups[COMPOSITION_ID_COLUMN].nunique():,} final groups · "
                                             f"{int(with_reference.sum()):,} series take a credibility reference "
                                             f"({reference_members['credibility_ref_id'].nunique():,} references)")
 
@@ -152,7 +166,12 @@ def build_ladder_groups(rated_units: pd.DataFrame, series_rate: pd.DataFrame, se
     configuration.log_action(STEP_LABEL, 9, "how every pass improves the support (groups: fewer and bigger; the units due "
                                             "add up in every pass; pct_usd_*: money to predict in groups that reach the floor):")
     configuration.show_table(summary)
-    return dict(steps=steps, summary=summary, groups=groups, reference_members=reference_members)
+    configuration.logger.doc(f"[{STEP_LABEL}] the 4 stages (0 raw · 1 sign · 2 extras · 3 collapse: the composition), "
+                             f"grouping the forecast series by the id of each stage:")
+    summary_by_stage = stage_summary(stages, estimable, history, configuration)
+    configuration.show_table(summary_by_stage)
+    return dict(steps=steps, summary=summary, groups=groups, reference_members=reference_members, stages=stages,
+                stage_summary=summary_by_stage)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -247,19 +266,29 @@ def run_the_passes(estimable: pd.DataFrame, patterns: pd.DataFrame, plan: list, 
     total_usd = usd_to_predict.sum()
 
     for step in plan:
+        previous_assigned_at = assigned_at.copy()
         if step["step"] > 0:
             support_before = support_of_groups(history, group, configuration)["support"]
             open_series = group.map(support_before).fillna(0.0) < floor - SUPPORT_TOLERANCE
             may_move = open_series & ~mixed & (neutral | step["signed_allowed"])
             if not may_move.any():
                 break
+            previous_group = group.copy()
             group[may_move] = patterns.loc[may_move, step["step"]]
             assigned_at[may_move] = step["step"]
+            # a group that keeps exactly the same series keeps the id it had: its id only changes
+            # when it really joins other series
+            unchanged = groups_that_did_not_change(previous_group, group, may_move)
+            for new_id, old_id in unchanged.items():
+                same_group = may_move & (group == new_id)
+                group[same_group] = old_id
+                assigned_at[same_group] = previous_assigned_at[same_group]
         groups_now = support_of_groups(history, group, configuration)
         support_of_series = group.map(groups_now["support"]).fillna(0.0)
         closed = support_of_series >= floor - SUPPORT_TOLERANCE
         step_rows.append(pd.DataFrame({SERIES_ID_COLUMN: estimable.index, "ladder_step": step["step"],
-                                       "step_name": step["name"], "group_id": group.to_numpy(),
+                                       "step_name": step["name"], "group_id": group.to_numpy(copy=True),   # a copy: the
+                                       # group of later passes is written over the same Series
                                        "group_support": support_of_series.to_numpy(), "closed": closed.astype(int).to_numpy()}))
         summary_rows.append({
             "ladder_step": step["step"], "step_name": step["name"], "groups": int(group.nunique()),
@@ -270,10 +299,75 @@ def run_the_passes(estimable: pd.DataFrame, patterns: pd.DataFrame, plan: list, 
             "pct_usd_own_rate": float(usd_to_predict[support_of_series >= configuration.own_rate_floor].sum() / total_usd)
                                 if total_usd else np.nan})
     steps = pd.concat(step_rows, ignore_index=True)
-    final = pd.DataFrame({ESTIMATION_ID_COLUMN: group, "final_step": assigned_at,
+    final = pd.DataFrame({COMPOSITION_ID_COLUMN: group, "final_step": assigned_at,
                           "closed": group.map(support_of_groups(history, group, configuration)["support"]).fillna(0.0)
                                     >= floor - SUPPORT_TOLERANCE})
     return steps, pd.DataFrame(summary_rows), final
+
+
+def groups_that_did_not_change(previous_group: pd.Series, group: pd.Series, moved: pd.Series) -> dict:
+    """{new id: old id} for every new group made of exactly one old group, whole (the same series)."""
+    moved_rows = pd.DataFrame({"new_id": group[moved], "old_id": previous_group[moved]})
+    if moved_rows.empty:
+        return {}
+    per_new_group = moved_rows.groupby("new_id")["old_id"].agg(["nunique", "first", "size"])
+    size_of_old_group = previous_group.value_counts()
+    same_series = (per_new_group["nunique"] == 1) & (per_new_group["size"] == per_new_group["first"].map(size_of_old_group))
+    return dict(zip(per_new_group.index[same_series], per_new_group.loc[same_series, "first"]))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# THE STAGES
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+STAGE_NAMES = {0: "raw", 1: "sign", 2: "extras", 3: "collapse"}
+
+
+def stage_of_each_pass(plan: list) -> dict:
+    """The stage of every pass: 0 itself, 1 the sign, 2 the extras, 3 the mandatory dims."""
+    stage_of_pass = {}
+    for step in plan:
+        if step["step"] == 0:
+            stage_of_pass[step["step"]] = 0
+        elif step["name"] == "sign":
+            stage_of_pass[step["step"]] = 1
+        elif step["name"].startswith("extra"):
+            stage_of_pass[step["step"]] = 2
+        else:
+            stage_of_pass[step["step"]] = 3
+    return stage_of_pass
+
+
+def stages_of_the_series(steps: pd.DataFrame, plan: list) -> pd.DataFrame:
+    """Per forecast series: the id and the support at the end of every stage (the last pass run that
+    belongs to the stage or an earlier one; a stage that adds nothing repeats the one before)."""
+    stage_of_pass = stage_of_each_pass(plan)
+    steps = steps.assign(stage=steps["ladder_step"].map(stage_of_pass))
+    stage_columns = {}
+    for stage in sorted(STAGE_NAMES):
+        last_pass = steps[steps["stage"] <= stage].sort_values("ladder_step").groupby(SERIES_ID_COLUMN).tail(1)
+        last_pass = last_pass.set_index(SERIES_ID_COLUMN)
+        stage_columns[f"stage{stage}_id"] = last_pass["group_id"]
+        stage_columns[f"stage{stage}_support"] = last_pass["group_support"]
+    return pd.DataFrame(stage_columns).reset_index()
+
+
+def stage_summary(stages: pd.DataFrame, estimable: pd.DataFrame, history: pd.DataFrame, configuration: Config) -> pd.DataFrame:
+    """Per stage: groups, median support, money to predict in groups that reach the floor and the own-rate
+    floor, and the units due (the same in every stage: each stage is a partition of the raw)."""
+    usd = estimable.set_index(SERIES_ID_COLUMN)["usd_por_predecir"] if SERIES_ID_COLUMN in estimable.columns else estimable["usd_por_predecir"]
+    total_usd = usd.sum()
+    rows = []
+    for stage, name in STAGE_NAMES.items():
+        ids = stages.set_index(SERIES_ID_COLUMN)[f"stage{stage}_id"]
+        support = stages.set_index(SERIES_ID_COLUMN)[f"stage{stage}_support"]
+        groups = support_of_groups(history, ids, configuration)
+        rows.append({"stage": stage, "stage_name": name, "groups": int(ids.nunique()),
+                     "median_group_support": float(groups["support"].median()),
+                     "units_due": float(groups["due"].sum()),
+                     "pct_usd_floor": float(usd.reindex(ids.index)[support >= configuration.support_floor].sum() / total_usd) if total_usd else np.nan,
+                     "pct_usd_own_rate": float(usd.reindex(ids.index)[support >= configuration.own_rate_floor].sum() / total_usd) if total_usd else np.nan})
+    return pd.DataFrame(rows)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -285,7 +379,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
     """The final group of every series with its support and rate, and, below the own-rate floor,
     its credibility reference with its support and rate; and the members of every reference."""
     floor, own_rate_floor = configuration.support_floor, configuration.own_rate_floor
-    groups_support = support_of_groups(history, final[ESTIMATION_ID_COLUMN], configuration)
+    groups_support = support_of_groups(history, final[COMPOSITION_ID_COLUMN], configuration)
     not_mixed = estimable[SIGN_COLUMN] != SIGN_MIXED
 
     # every pattern of every pass, counted over ALL the series (the closed and the big ones too)
@@ -295,7 +389,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
         all_patterns[step["step"]] = support_of_groups(history, pattern_of_series, configuration)
 
     group_rows = []
-    for group_id, members in final.groupby(ESTIMATION_ID_COLUMN):
+    for group_id, members in final.groupby(COMPOSITION_ID_COLUMN):
         group_support = float(groups_support.loc[group_id, "support"]) if group_id in groups_support.index else 0.0
         group_series = int(len(members))
         first_member = members.index[0]
@@ -315,7 +409,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
                         break
             if widest is not None:
                 chosen_step, chosen_id = widest
-        row = {ESTIMATION_ID_COLUMN: group_id, "final_step": int(members["final_step"].iloc[0]),
+        row = {COMPOSITION_ID_COLUMN: group_id, "final_step": int(members["final_step"].iloc[0]),
                "group_series": group_series, "group_support": group_support,
                "group_rate": float(groups_support.loc[group_id, "rate"]) if group_id in groups_support.index else np.nan,
                "credibility_ref_id": chosen_id, "credibility_ref_step": chosen_step}
@@ -328,7 +422,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
         if column_name not in by_group.columns:
             by_group[column_name] = np.nan
 
-    groups = final[[ESTIMATION_ID_COLUMN]].reset_index().merge(by_group, on=ESTIMATION_ID_COLUMN, how="left")
+    groups = final[[COMPOSITION_ID_COLUMN]].reset_index().merge(by_group, on=COMPOSITION_ID_COLUMN, how="left")
     reference_rows = []
     for (ref_step, ref_id), _ in by_group.dropna(subset=["credibility_ref_id"]).groupby(["credibility_ref_step", "credibility_ref_id"]):
         members = patterns.index[(patterns[int(ref_step)] == ref_id) & not_mixed]
@@ -371,7 +465,7 @@ def check_the_ladder(steps: pd.DataFrame, summary: pd.DataFrame, groups: pd.Data
                             failure_detail=f"{len(reopened):,} series left a closed group · groups by pass {summary['groups'].tolist()}")
 
     # [4] a reference is wider than its group
-    with_reference = groups.dropna(subset=["credibility_ref_id"]).drop_duplicates(ESTIMATION_ID_COLUMN)
+    with_reference = groups.dropna(subset=["credibility_ref_id"]).drop_duplicates(COMPOSITION_ID_COLUMN)
     narrower = with_reference[with_reference["ref_series"] <= with_reference["group_series"]]
     configuration.log_check(STEP_LABEL, check_log, "every credibility reference has more series than its group", narrower.empty,
                             failure_detail=f"{len(narrower):,} references not wider than their group",

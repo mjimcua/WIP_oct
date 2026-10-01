@@ -43,6 +43,22 @@ Hay tres reglas más:
 - **Una serie con señales de los dos signos** (mixta) nunca se junta.
 - **El proceso se para** en cuanto no queda ningún grupo abierto que pueda moverse.
 
+## Las 4 etapas
+
+Las pasadas se resumen en las 4 etapas que se leen en el núcleo (un id y un soporte por etapa y forecast serie):
+
+| Etapa | Qué hace | Columnas en el núcleo |
+|---|---|---|
+| 0 · raw | la forecast serie con sus huecos | `s10_stage0_id`, `s10_stage0_support` |
+| 1 · signo | une las señales por signo | `s10_stage1_id`, `s10_stage1_support` |
+| 2 · extras | anula las extras de renovación | `s10_stage2_id`, `s10_stage2_support` |
+| 3 · colapso | quita mandatory en el orden de colapso: la **composición**, con la que se predice | `s10_stage3_id`, `s10_stage3_support` |
+| 4 · credibilidad | por debajo de 271, mezcla la tasa de la composición con la de una referencia | `s11_credibility_ref_id`, `s11_ref_support`, `s11_ref_rate`, `s11_k`, `s11_z`, `s11_credibility_effect_pp` |
+
+**Un id solo cambia cuando cambia el grupo.** Si en una pasada un grupo conserva exactamente las mismas forecast series, conserva su id aunque esa pasada haya puesto una dimensión más a `*`. Así, leyendo los ids etapa a etapa, el id cambia justo donde la forecast serie se juntó con otras. Una etapa que no aporta nada repite el id y el soporte de la anterior.
+
+El modelo de datos completo (núcleo, satélites, claves y sumas de comprobación) está en `DOC_modelo_datos.md`.
+
 ## Cada pasada es un reparto
 
 En cada pasada, cada serie está en **un** grupo. Por eso agrupar por el id de cualquier pasada da los mismos totales que el raw, con menos series y más grandes. Así se puede medir cuánto mejora el soporte en cada pasada (tabla `sff_ladder_summary` y capítulo 3 del informe).
@@ -74,7 +90,7 @@ El orden "canal → producto → región" es inventado para el ejemplo. El real 
 
 **Credibilidad** (k = 60). La referencia de un grupo es su propio id o el de una pasada posterior, contado sobre **todas** las series, también las cerradas y las grandes. Se elige la primera candidata que tiene más series que el grupo y llega a 30.
 
-| Grupo final | n | Referencia | N | z | Tasa |
+| Composición | n | Referencia | N | z | Tasa |
 |---|---|---|---|---|---|
 | S1 | 2.440 | — | — | 1 | la suya |
 | S6 | 150 | `EU\|*\|neutro\|*` (incluye S1) | 2.633 | 0,71 | 0,71 · S6 + 0,29 · referencia |
@@ -88,7 +104,7 @@ El orden "canal → producto → región" es inventado para el ejemplo. El real 
 
 ## En el forecast
 
-1. **Paso 12:** la serie mensual de cada grupo final (la suma de sus series).
+1. **Paso 12:** la serie mensual de cada composición (la suma de sus series).
 2. **Paso 14:** el backtest elige la técnica de cada grupo.
 3. **Paso 17:** la técnica predice la tasa del grupo en cada mes futuro. Si z < 1, esa predicción se desplaza hacia la referencia en (1 − z) de la diferencia de niveles, en escala logit: es la misma mezcla del paso 11 aplicada a la predicción. Todas las series del grupo reciben esa tasa, por su propia pipeline.
 
@@ -110,9 +126,10 @@ El orden "canal → producto → región" es inventado para el ejemplo. El real 
 |---|---|---|
 | `sff_ladder_steps` | serie × pasada | `ladder_step`, `step_name`, `group_id`, `group_support`, `closed` |
 | `sff_ladder_summary` | pasada | `groups`, `open_groups`, `median_group_support`, `units_due` (igual en todas), `pct_usd_floor`, `pct_usd_own_rate` |
-| `sff_ladder_groups` | serie estimable | `final_group_id`, `final_step`, `group_series`, `group_support`, `group_rate`, `credibility_ref_id`, `credibility_ref_step`, `ref_series`, `ref_support`, `ref_rate` |
-| `sff_series_estimacion` | serie | lo anterior + `k`, `z`, `tasa_estimada`, `se_estimacion_pp`, `se_prediccion_pp`, `nivel_riesgo` |
-| `sff_nucleo` | fila | `s11_final_group_id`, `s11_final_step`, `s11_group_support`, `s11_group_rate`, `s11_credibility_ref_id`, `s11_ref_support`, `s11_ref_rate`, `s11_z`, `s11_tasa_estimada`… |
+| `sff_ladder_groups` | serie estimable | `composition_id`, `final_step`, `group_series`, `group_support`, `group_rate`, `credibility_ref_id`, `credibility_ref_step`, `ref_series`, `ref_support`, `ref_rate` |
+| `sff_series_estimacion` | serie | lo anterior + `k`, `z`, `tasa_estimada`, `credibility_effect_pp`, `se_estimacion_pp`, `se_prediccion_pp`, `nivel_riesgo` |
+| `sff_nucleo` | fila | las 4 etapas (`s10_stage*`) y la credibilidad (`s11_*`): ver `DOC_modelo_datos.md` |
+| `sff_composition`, `sff_credibility`, `sff_credibility_members` | id de etapa · referencia · referencia × serie | el detalle para auditar (paso AUD) |
 
 En Power BI, `group_id` filtrado por `ladder_step` agrupa el raw tal como queda en cada pasada.
 

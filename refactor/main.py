@@ -38,6 +38,7 @@ from step_17_forecast import assemble_forecast
 from step_18_validation import validate_chain
 from step_19_portfolio_exam import examine_portfolio
 from step_20_time_series import build_time_series_and_total, split_time_series_rows
+from step_audit import build_audit_tables
 from step_nucleo import build_core_table
 from step_informe import build_report
 
@@ -184,12 +185,16 @@ def run(configuration: Config) -> dict:
     results["time_series"], results["forecast_total"] = build_time_series_and_total(
         time_series_rows, fine_table, forecast["forecast"], configuration)                      # step 20
     results["time_series_rows"] = time_series_rows
+    results["audit"] = build_audit_tables(ladder, series_rate, series_estimate, rated_units, pool_series, pool_reference,
+                                          pool_dynamics, backtest, forecast["forecast"], configuration)   # the satellites
     results["core"], results["core_legend"] = build_core_table(
         fine_table, configuration, forecast_units=forecast_units, support_bound=support_bound, rated_units=rated_units,
         series_table=series_table, series_rate=series_rate, series_estimate=series_estimate, pool_dynamics=pool_dynamics,
         technique_decision=backtest["decision"], exam_by_pool=backtest["exam_by_pool"], forecast=forecast["forecast"],
         time_series_rows=time_series_rows, time_series_table=results["time_series"],
-        forecast_total=results["forecast_total"])                                                  # the core: every row, every decision
+        forecast_total=results["forecast_total"], ladder_stages=ladder["stages"],
+        series_dynamics=results["audit"]["series_dynamics"], series_exam=results["audit"]["series_exam"])
+                                                 # the core: every row, every decision
     results["validation"] = validate_chain(raw, results, configuration)                            # step 18 (after 19: it reads its exam)
     results["card"] = build_report(raw, results, configuration)                                   # the report, last
     return results

@@ -79,7 +79,7 @@ import pandas as pd
 from config import ACTIVE_FLAG_VALUES, Config, discount_bucket_labels, is_one_year, join_columns, parse_month
 from step_14_backtest import band_of_horizon
 from techniques import inverse_logit, logit, predict_logit
-from vocabulario import (CALENDAR_ROLE_COLUMN, ESTIMATION_ID_COLUMN, PATH_CONTRACT, PATH_STATISTICAL,
+from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PATH_CONTRACT, PATH_STATISTICAL,
                          PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_COLUMN,
                          RATE_FROM_CELL, RATE_FROM_GLOBAL, RATE_FROM_POOL, ROLE_PROJECTION, SERIES_ID_COLUMN,
                          TABLE_BUSINESS_SUMMARY, TABLE_FORECAST, TABLE_FORECAST_MONTH, TRUTH_ROLES, UNIT_ID_COLUMN,
@@ -150,6 +150,12 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
                                             f"${extension[configuration.pipeline_usd_col].sum() if len(extension) else 0:,.0f} due · "
                                             f"${extension['esperado_usd'].sum() if len(extension) else 0:,.0f} expected")
 
+    # the confidence of every row: how sure the forecast is of its rate
+    future["confidence"] = confidence_of_rows(future, context, configuration)
+    configuration.log_action(STEP_LABEL, 6, "confidence (USD expected): " + " · ".join(
+        f"{label} {share:.0%}" for label, share in
+        (future.groupby("confidence")["esperado_usd"].sum() / max(future["esperado_usd"].sum(), 1e-9)).items()))
+
     # [7] the totals
     by_month, by_year = totals(future, fine_table, configuration)
     configuration.log_action(STEP_LABEL, 7, f"{len(by_month)} months · {len(by_year)} years")
@@ -161,8 +167,8 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
     # [9] the tables
     configuration.log_action(STEP_LABEL, 9, "writing the forecast, the months and the summary")
     forecast_columns = ([period_column, "h", PIPELINE_ORIGIN_COLUMN, SERIES_ID_COLUMN, UNIT_ID_COLUMN, UPLIFT_CELL_ID_COLUMN,
-                         ESTIMATION_ID_COLUMN, configuration.pipeline_units_col, configuration.pipeline_usd_col, "origen_tasa",
-                         "tecnica", "tasa", "tasa_baja", "tasa_alta", "via_uplift", "uplift", "uplift_bajo", "uplift_alto",
+                         COMPOSITION_ID_COLUMN, configuration.pipeline_units_col, configuration.pipeline_usd_col, "origen_tasa",
+                         "tecnica", "tasa", "tasa_baja", "tasa_alta", "confidence", "via_uplift", "uplift", "uplift_bajo", "uplift_alto",
                          "esperado_unidades", "esperado_usd", "esperado_usd_bajo", "esperado_usd_alto"]
                         + configuration.rate_series_columns + configuration.extra_revalorizacion
                         + ([configuration.discount_value_column, configuration.discount_bucket_column]
@@ -184,6 +190,29 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
                              f"of the pipeline):")
     configuration.show_table(by_year)
     return dict(forecast=future, by_month=by_month, by_year=by_year)
+
+
+CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW = "high", "medium", "low"
+
+
+def confidence_of_rows(rows: pd.DataFrame, context: dict, configuration: Config) -> np.ndarray:
+    """The confidence of every future row:
+      high    the half-width of its rate band ≤ confidence_high_band_pp (5), its composition judged by
+              the backtest, and the exam error of the chosen technique for its horizon band ≤
+              confidence_high_exam_pp (5)
+      medium  its composition judged and the half-width of its band ≤ confidence_medium_band_pp (10)
+      low     the rest: a wider band, a composition below the support floor (not judged), or a rate
+              from the mandatory cell or the global rate (no composition)"""
+    band_half_width_pp = 100 * (rows["tasa_alta"] - rows["tasa_baja"]) / 2
+    judged_ids = set(context["pool_reference"].loc[context["pool_reference"]["gate"] == GATE_LEVEL, COMPOSITION_ID_COLUMN])
+    judged = rows[COMPOSITION_ID_COLUMN].isin(judged_ids) & (rows["origen_tasa"] == RATE_FROM_POOL)
+    exam = context["backtest"]["exam_by_pool"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["elegida_err_pp_medio"]
+    horizon_band = rows["h"].map(lambda horizon: band_of_horizon(int(horizon), configuration.horizon_bands))
+    exam_error = pd.Series(list(zip(rows[COMPOSITION_ID_COLUMN], horizon_band)), index=rows.index).map(exam)
+    high = (judged & (band_half_width_pp <= configuration.confidence_high_band_pp)
+            & (exam_error <= configuration.confidence_high_exam_pp))
+    medium = judged & (band_half_width_pp <= configuration.confidence_medium_band_pp)
+    return np.select([high, medium], [CONFIDENCE_HIGH, CONFIDENCE_MEDIUM], default=CONFIDENCE_LOW)
 
 
 def predict_rows(rows: pd.DataFrame, context: dict, configuration: Config) -> pd.DataFrame:
@@ -360,10 +389,10 @@ def judged_horizon(horizon: int, judged: list) -> int:
 def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, configuration: Config) -> pd.DataFrame:
     """The rate of every estimation id at every future horizon, with the technique of its band,
     learning from every closed month of the id."""
-    decision = backtest["decision"].set_index([ESTIMATION_ID_COLUMN, "tramo_h"])["tecnica"]
+    decision = backtest["decision"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"]
     truth = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & pool_series[RATE_COLUMN].notna() & (pool_series["vencen"] > 0)]
     rows = []
-    for estimation_id, monthly in truth.groupby(ESTIMATION_ID_COLUMN):
+    for estimation_id, monthly in truth.groupby(COMPOSITION_ID_COLUMN):
         monthly = monthly.sort_values(configuration.period_col)
         history = logit(monthly[RATE_COLUMN].to_numpy(dtype=float))
         calendar_months = np.array([month.month for month in monthly[configuration.period_col]])
@@ -375,20 +404,20 @@ def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, 
                 technique = configuration.challenger_technique
                 predicted = predict_logit(technique, history, calendar_months, int(horizon))
             rows.append((estimation_id, int(horizon), technique, float(inverse_logit(predicted))))
-    return pd.DataFrame(rows, columns=[ESTIMATION_ID_COLUMN, "h", "tecnica", "tasa_pool_h"])
+    return pd.DataFrame(rows, columns=[COMPOSITION_ID_COLUMN, "h", "tecnica", "tasa_pool_h"])
 
 
 def rate_of_rows(future: pd.DataFrame, series_estimate: pd.DataFrame, pool_rates: pd.DataFrame, pool_reference: pd.DataFrame,
                  rated_units: pd.DataFrame, backtest: dict, forecast_units: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     """The rate of every future row: its group's prediction (moved toward its credibility reference),
     mandatory cell, or global; and its band."""
-    estimate = series_estimate[[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "z", "group_rate", "ref_rate"]]
-    future = future.drop(columns=[column for column in (ESTIMATION_ID_COLUMN, "z", "group_rate", "ref_rate", "tecnica",
+    estimate = series_estimate[[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN, "z", "group_rate", "ref_rate"]]
+    future = future.drop(columns=[column for column in (COMPOSITION_ID_COLUMN, "z", "group_rate", "ref_rate", "tecnica",
                                                         "tasa_pool_h", "tasa_pool", "tasa", "origen_tasa")
                                   if column in future.columns])
     future = future.merge(estimate, on=SERIES_ID_COLUMN, how="left")
-    future = future.merge(pool_rates, on=[ESTIMATION_ID_COLUMN, "h"], how="left")
-    future = future.merge(pool_reference[[ESTIMATION_ID_COLUMN, "tasa_pool"]], on=ESTIMATION_ID_COLUMN, how="left")
+    future = future.merge(pool_rates, on=[COMPOSITION_ID_COLUMN, "h"], how="left")
+    future = future.merge(pool_reference[[COMPOSITION_ID_COLUMN, "tasa_pool"]], on=COMPOSITION_ID_COLUMN, how="left")
 
     # the group's predicted rate, moved toward its credibility reference by (1 − z) of the difference
     # of levels (logit scale): the same blend as step 11, applied to the prediction

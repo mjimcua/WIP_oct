@@ -54,7 +54,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
-from vocabulario import (ESTIMATION_ID_COLUMN, LEVEL_BORROWED, LEVEL_FAR, LEVEL_MIXED, LEVEL_NO_HISTORY,
+from vocabulario import (COMPOSITION_ID_COLUMN, LEVEL_BORROWED, LEVEL_FAR, LEVEL_MIXED, LEVEL_NO_HISTORY,
                          LEVEL_NO_IMPACT, LEVEL_OWN, LEVEL_OWN_REINFORCED, LEVEL_OWN_SHORT, LEVEL_SIGNED_UNDER_FLOOR,
                          LEVEL_TIME_SERIES, ROUTE_COLUMN, ROUTE_FUTURE_ONLY, ROUTE_HISTORY_ONLY, SERIES_ID_COLUMN,
                          SIGN_COLUMN, SIGN_MIXED, SIGN_NEUTRAL, TABLE_RISK_LEVELS, TABLE_SERIES_ESTIMATE,
@@ -120,7 +120,7 @@ def climb_the_ladder(series_rate: pd.DataFrame, ladder: dict, configuration: Con
     # [1] the final group and the reference of every estimable series
     groups = ladder["groups"]
     step_names = dict(zip(ladder["summary"]["ladder_step"], ladder["summary"]["step_name"]))
-    configuration.log_action(STEP_LABEL, 1, f"{len(groups):,} estimable series in {groups[ESTIMATION_ID_COLUMN].nunique():,} "
+    configuration.log_action(STEP_LABEL, 1, f"{len(groups):,} estimable series in {groups[COMPOSITION_ID_COLUMN].nunique():,} "
                                             f"final groups; {int(groups['credibility_ref_id'].notna().sum()):,} of them "
                                             f"with a credibility reference")
 
@@ -162,14 +162,19 @@ def climb_the_ladder(series_rate: pd.DataFrame, ladder: dict, configuration: Con
     return series_estimate, money_by_level
 
 
-def credibility_k(groups: pd.DataFrame, configuration: Config) -> pd.Series:
-    """Bühlmann-Straub k per reference, from the final groups that share it (one row per group):
-    within = mean of p(1 − p); between = weighted variance of p minus its sampling part;
-    k = within / between. Fewer than 3 groups: k_cred. No between variance: 10 × k_cred."""
-    siblings = groups.drop_duplicates(ESTIMATION_ID_COLUMN).dropna(subset=["credibility_ref_id", "group_rate"]).copy()
+def credibility_k_detail(groups: pd.DataFrame, configuration: Config) -> pd.DataFrame:
+    """Bühlmann-Straub k per credibility reference, with the numbers it is made of, from the
+    compositions that share the reference (one row per composition):
+      within  = mean of p(1 − p): how much a composition's rate moves by chance
+      between = weighted variance of p minus its sampling part: how much the compositions differ for real
+      k = within / between · source 'estimated'
+      fewer than 3 compositions: k_cred · source 'default'
+      no real difference between them: 10 × k_cred (they take the reference's rate) · source 'homogeneous'"""
+    siblings = groups.drop_duplicates(COMPOSITION_ID_COLUMN).dropna(subset=["credibility_ref_id", "group_rate"]).copy()
     siblings = siblings[siblings["group_support"] > 0]
+    columns = ["credibility_ref_id", "compositions_using", "within_variance", "between_variance", "k", "k_source"]
     if siblings.empty:
-        return pd.Series(dtype=float)
+        return pd.DataFrame(columns=columns)
     rates, weights = siblings["group_rate"], siblings["group_support"]
     siblings["_w"] = weights
     siblings["_wp"] = weights * rates
@@ -180,13 +185,23 @@ def credibility_k(groups: pd.DataFrame, configuration: Config) -> pd.Series:
     siblings["_w_sq_dev"] = weights * (rates - siblings["_pooled"]) ** 2
     siblings["_w_sampling"] = weights * rates * (1 - rates) / np.maximum(weights, 1)
     grouped = siblings.groupby("credibility_ref_id")
-    count = grouped.size()
-    within = grouped["_within"].mean()
-    between = (grouped["_w_sq_dev"].sum() - grouped["_w_sampling"].sum()) / grouped["_w"].sum()
-    k = pd.Series(np.where(between > MIN_BETWEEN_VARIANCE, within / between.where(between > MIN_BETWEEN_VARIANCE),
-                           HOMOGENEOUS_POOL_FACTOR * configuration.k_cred), index=count.index)
-    k[count < MIN_SIBLINGS_FOR_K] = configuration.k_cred
-    return k
+    detail = pd.DataFrame({"compositions_using": grouped.size(),
+                           "within_variance": grouped["_within"].mean(),
+                           "between_variance": (grouped["_w_sq_dev"].sum() - grouped["_w_sampling"].sum()) / grouped["_w"].sum()})
+    has_between = detail["between_variance"] > MIN_BETWEEN_VARIANCE
+    detail["k"] = np.where(has_between, detail["within_variance"] / detail["between_variance"].where(has_between),
+                           HOMOGENEOUS_POOL_FACTOR * configuration.k_cred)
+    detail["k_source"] = np.where(has_between, "estimated", "homogeneous")
+    too_few = detail["compositions_using"] < MIN_SIBLINGS_FOR_K
+    detail.loc[too_few, "k"] = configuration.k_cred
+    detail.loc[too_few, "k_source"] = "default"
+    return detail.reset_index()[columns]
+
+
+def credibility_k(groups: pd.DataFrame, configuration: Config) -> pd.Series:
+    """The k of every credibility reference (see credibility_k_detail)."""
+    detail = credibility_k_detail(groups, configuration)
+    return detail.set_index("credibility_ref_id")["k"] if len(detail) else pd.Series(dtype=float)
 
 
 def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_reference: pd.Series,
@@ -195,15 +210,15 @@ def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_referen
     estimate = series_rate.merge(groups, on=SERIES_ID_COLUMN, how="left")
 
     # a series that is not estimable is its own group, with its own rate
-    not_estimable = estimate[ESTIMATION_ID_COLUMN].isna()
-    estimate.loc[not_estimable, ESTIMATION_ID_COLUMN] = estimate.loc[not_estimable, SERIES_ID_COLUMN]
+    not_estimable = estimate[COMPOSITION_ID_COLUMN].isna()
+    estimate.loc[not_estimable, COMPOSITION_ID_COLUMN] = estimate.loc[not_estimable, SERIES_ID_COLUMN]
     estimate.loc[not_estimable, "final_step"] = 0
     estimate.loc[not_estimable, "group_series"] = 1
     estimate.loc[not_estimable, "group_support"] = estimate.loc[not_estimable, "n_propio"]
     estimate.loc[not_estimable, "group_rate"] = estimate.loc[not_estimable, "tasa_propia"]
     estimate["final_step"] = estimate["final_step"].astype(int)
     estimate["group_series"] = estimate["group_series"].astype(int)
-    estimate[ESTIMATION_ID_COLUMN] = estimate[ESTIMATION_ID_COLUMN]
+    estimate[COMPOSITION_ID_COLUMN] = estimate[COMPOSITION_ID_COLUMN]
 
     group_rate, group_support = estimate["group_rate"], estimate["group_support"].fillna(0.0)
     reference_rate, reference_support = estimate["ref_rate"], estimate["ref_support"]
@@ -224,6 +239,8 @@ def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_referen
     estimate["se_prediccion_pp"] = np.where(estimate["tasa_estimada"].notna(),
                                             np.sqrt(estimate["se_estimacion_pp"] ** 2 + own_noise ** 2), np.nan)
     estimate["alcanzo_suelo"] = (group_support >= configuration.support_floor - ROUNDING_TOLERANCE).astype(int)
+    # how much the credibility moves the rate of the composition (pp): 0 when it predicts alone
+    estimate["credibility_effect_pp"] = PERCENTAGE_POINTS * (estimate["tasa_estimada"] - group_rate)
     return estimate
 
 
@@ -274,7 +291,7 @@ def check_ladder(estimate: pd.DataFrame, series_rate: pd.DataFrame, configuratio
                             context=f"{len(estimate):,} series")
 
     # [2] the group lends its rate: every series of a group has the same estimated rate
-    spread = estimate.dropna(subset=["tasa_estimada"]).groupby(ESTIMATION_ID_COLUMN)["tasa_estimada"].agg(lambda rates: rates.max() - rates.min())
+    spread = estimate.dropna(subset=["tasa_estimada"]).groupby(COMPOSITION_ID_COLUMN)["tasa_estimada"].agg(lambda rates: rates.max() - rates.min())
     configuration.log_check(STEP_LABEL, check_log, "every series of a group has the same estimated rate",
                             bool((spread <= ROUNDING_TOLERANCE).all()),
                             failure_detail=f"{int((spread > ROUNDING_TOLERANCE).sum()):,} groups with different rates")

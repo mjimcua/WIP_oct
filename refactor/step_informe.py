@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config, UNKNOWN_DISCOUNT_BUCKET
-from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, ESTIMATION_ID_COLUMN, GATE_LEVEL, LEVEL_OWN,
+from vocabulario import (CALENDAR_ROLE_COLUMN, COVERAGE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, LEVEL_OWN,
                          METHOD_FRAMEWORK, PURPOSE_SELECTION, REPORT_FILE_NAME, ROLES_IN_ORDER, ROLE_PROJECTION,
                          S0_PIPELINE_USD_COLUMN, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN, SERIES_ID_COLUMN,
                          SYNTHETIC_COLUMN, TABLE_SERIES_CARD, TOTAL_ORIGIN_TOTAL, TRUTH_ROLES, UPLIFT_CELL_ID_COLUMN)
@@ -151,16 +151,16 @@ def series_card(results: dict, configuration: Config) -> pd.DataFrame:
                                             on=SERIES_ID_COLUMN, how="left")
     dynamics = results.get("pool_dynamics")
     if dynamics is not None and len(dynamics):
-        card = card.merge(dynamics[[ESTIMATION_ID_COLUMN, "phi", "tendencia", "tendencia_pp_ano", "estacional",
-                                    "amplitud_pp", "meses_alto", "meses_bajo"]], on=ESTIMATION_ID_COLUMN, how="left")
+        card = card.merge(dynamics[[COMPOSITION_ID_COLUMN, "phi", "tendencia", "tendencia_pp_ano", "estacional",
+                                    "amplitud_pp", "meses_alto", "meses_bajo"]], on=COMPOSITION_ID_COLUMN, how="left")
     backtest = results.get("backtest")
     if backtest is not None:
-        per_band = backtest["decision"][[ESTIMATION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]].merge(
-            backtest["exam_by_pool"][[ESTIMATION_ID_COLUMN, "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio"]],
-            on=[ESTIMATION_ID_COLUMN, "tramo_h"], how="left")
-        wide = per_band.pivot(index=ESTIMATION_ID_COLUMN, columns="tramo_h")
+        per_band = backtest["decision"][[COMPOSITION_ID_COLUMN, "tramo_h", "tecnica", "tecnica_origen"]].merge(
+            backtest["exam_by_pool"][[COMPOSITION_ID_COLUMN, "tramo_h", "elegida_err_pp_medio", "retador_err_pp_medio"]],
+            on=[COMPOSITION_ID_COLUMN, "tramo_h"], how="left")
+        wide = per_band.pivot(index=COMPOSITION_ID_COLUMN, columns="tramo_h")
         wide.columns = [f"{name}_{band}" for name, band in wide.columns]
-        card = card.merge(wide, left_on=ESTIMATION_ID_COLUMN, right_index=True, how="left")
+        card = card.merge(wide, left_on=COMPOSITION_ID_COLUMN, right_index=True, how="left")
     card["error_estimacion_pp"] = configuration.z * card["se_estimacion_pp"]
     return card
 
@@ -268,13 +268,16 @@ def chapter_support(results: dict, configuration: Config, headline: list) -> str
              "su tasa se conoce a ±5 pp y puede ir sola. **Antes**: cada serie con su propio soporte. **Después**: la "
              "escalera junta las series pasada a pasada (signo, extras y dimensiones mandatory en el orden de colapso) hasta "
              "que cada grupo llega a 30; el grupo presta su tasa a sus series y, por debajo de 271, la mezcla con la de una "
-             "referencia más amplia por credibilidad. Ver `DOC_escalera.md`.", "",
+             "referencia más amplia por credibilidad (etapa 4). Ver `DOC_escalera.md` y `DOC_modelo_datos.md`.", "",
              "**Antes · el dinero por soporte propio (el dial):**", "", markdown_table(before),
              "**Antes y después · el error con el que se CONOCE la tasa de cada serie** (antes: su error binomial con su "
              "propio soporte; después: el error de la estimación de la escalera). La predicción de un mes concreto conserva "
              "además el ruido de su propio tamaño, que ninguna escalera elimina: está en el nivel de riesgo.", "",
              markdown_table(comparison, 1),
-             "**Pasada a pasada · cómo mejora el soporte** (cada pasada es un reparto: las unidades que vencen suman lo "
+             "**Etapa a etapa · cómo mejora el soporte** (0 raw · 1 signo · 2 extras · 3 colapso = la composición con la que "
+             "se predice; agrupando por el id de cada etapa, las unidades que vencen suman lo mismo):", "",
+             markdown_table(results["ladder"]["stage_summary"], 2) if results.get("ladder") else "",
+             "**Pasada a pasada · el detalle dentro de cada etapa** (cada pasada es un reparto: las unidades que vencen suman lo "
              "mismo en todas; los grupos son menos y más grandes; pct_usd_floor / pct_usd_own_rate: dinero por predecir en "
              "grupos que llegan a 30 / a 271):", "",
              markdown_table(results["ladder"]["summary"], 2) if results.get("ladder") else "",
@@ -303,7 +306,7 @@ def chapter_dynamics(results: dict, configuration: Config) -> str:
     if dynamics is not None and len(dynamics):
         lines += ["**Los pools con soporte, uno a uno:**", "",
                   markdown_table(dynamics.sort_values("usd_por_predecir", ascending=False).head(TOP_ROWS)
-                                 [[ESTIMATION_ID_COLUMN, "meses", "phi", "tendencia_pp_ano", "estacional", "amplitud_pp",
+                                 [[COMPOSITION_ID_COLUMN, "meses", "phi", "tendencia_pp_ano", "estacional", "amplitud_pp",
                                    "meses_alto", "meses_bajo", "usd_por_predecir"]])]
     return "\n".join(lines) + "\n"
 
@@ -319,7 +322,7 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
     judged_share = (reference.loc[reference["gate"] == GATE_LEVEL, "usd_por_predecir"].sum()
                     / max(reference["usd_por_predecir"].sum(), 1))
 
-    exam_by_band = exam_by_pool.merge(reference[[ESTIMATION_ID_COLUMN, "usd_por_predecir"]], on=ESTIMATION_ID_COLUMN)
+    exam_by_band = exam_by_pool.merge(reference[[COMPOSITION_ID_COLUMN, "usd_por_predecir"]], on=COMPOSITION_ID_COLUMN)
     band_rows = []
     for band_name, rows in exam_by_band.groupby("tramo_h"):
         weights = rows["usd_por_predecir"] + 1e-9
@@ -330,9 +333,9 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
                           "dentro_banda": rows["dentro_banda"].mean()})
     by_band = pd.DataFrame(band_rows)
 
-    card = results["series_estimate"][[SERIES_ID_COLUMN, ESTIMATION_ID_COLUMN, "nivel_riesgo", "usd_por_predecir"]]
+    card = results["series_estimate"][[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN, "nivel_riesgo", "usd_por_predecir"]]
     short = exam_by_pool[exam_by_pool["tramo_h"] == list(configuration.horizon_bands)[0]]
-    by_level = card.merge(short[[ESTIMATION_ID_COLUMN, "elegida_err_pp_medio", "retador_err_pp_medio"]], on=ESTIMATION_ID_COLUMN, how="left")
+    by_level = card.merge(short[[COMPOSITION_ID_COLUMN, "elegida_err_pp_medio", "retador_err_pp_medio"]], on=COMPOSITION_ID_COLUMN, how="left")
     by_level = (by_level.dropna(subset=["elegida_err_pp_medio"]).groupby("nivel_riesgo")
                 .apply(lambda rows: pd.Series({"series": int(len(rows)), "usd_por_predecir": rows["usd_por_predecir"].sum(),
                                                "error_elegida_pp": np.average(rows["elegida_err_pp_medio"], weights=rows["usd_por_predecir"] + 1e-9),
@@ -376,7 +379,52 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
              "wape_series: serie a serie, sin compensaciones):", "",
              markdown_table(results["portfolio_exam_summary"], 3) if results.get("portfolio_exam_summary") is not None else "",
              markdown_table(results["portfolio_exam"], 3) if results.get("portfolio_exam") is not None else ""]
+    precision_by_type = exam_precision_by_series_type(results)
+    if precision_by_type is not None:
+        overall = precision_by_type.iloc[0]
+        headline.append(("predicciones del examen dentro de su intervalo · WAPE serie a serie",
+                         f"{overall['en_intervalo']:.0%} de {int(overall['predicciones']):,} · {overall['wape']:.1%}"))
+        lines += ["**Cuánto acertamos, forecast serie a forecast serie** (la técnica elegida de cada serie, en cada mes de "
+                  "examen y horizonte, aplicada a su propia pipeline; cada predicción con su intervalo, construido como la banda "
+                  "del forecast; en_intervalo: proporción de predicciones cuyo valor real cayó dentro). Cruzado por el tipo de "
+                  "serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad, solo donde son medibles:", "",
+                  markdown_table(precision_by_type.assign(
+                      predicciones=precision_by_type["predicciones"].astype(int),
+                      en_intervalo=precision_by_type["en_intervalo"].map("{:.0%}".format),
+                      wape=precision_by_type["wape"].map("{:.1%}".format),
+                      sesgo=precision_by_type["sesgo"].map("{:+.1%}".format)), 0)]
     return "\n".join(lines) + "\n"
+
+
+def exam_precision_by_series_type(results: dict):
+    """The exam of every forecast series (its chosen technique) summed by type of series: all, by
+    volatility, by trend and by seasonality (counts and units added, then the ratios)."""
+    audit = results.get("audit")
+    if not audit:
+        return None
+    exam = audit["series_exam"].merge(audit["series_dynamics"], on=SERIES_ID_COLUMN, how="left")
+    exam = exam[exam["exam_status"] == "tested"]
+    if exam.empty:
+        return None
+    measured = exam["measurable"] == "yes"
+    segments = [("todas las series examinadas", exam.index == exam.index),
+                ("volatilidad baja (φ ≤ 1,5)", exam["phi"] <= 1.5),
+                ("volatilidad alta (φ > 1,5)", exam["phi"] > 1.5),
+                ("con tendencia (medible)", measured & exam["trend"].fillna(0).ne(0)),
+                ("sin tendencia (medible)", measured & exam["trend"].fillna(0).eq(0)),
+                ("estacional (medible)", measured & exam["seasonal"].eq(1)),
+                ("no estacional (medible)", measured & exam["seasonal"].eq(0)),
+                ("dinámica no medible (poco soporte o historia)", ~measured)]
+    rows = []
+    for name, mask in segments:
+        block = exam[mask]
+        if block.empty:
+            continue
+        rows.append({"segmento": name, "series": len(block), "predicciones": block["exam_predictions"].sum(),
+                     "en_intervalo": block["exam_in_band"].sum() / block["exam_predictions"].sum(),
+                     "wape": block["exam_abs_err_units"].sum() / block["exam_real_units"].sum(),
+                     "sesgo": block["exam_pred_units"].sum() / block["exam_real_units"].sum() - 1})
+    return pd.DataFrame(rows)
 
 
 def chapter_uplift(results: dict, configuration: Config) -> str:

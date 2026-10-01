@@ -81,7 +81,8 @@ TABLE_DIMENSION_PAIRS = "decision_eta2_pares"   # step 09: the pairs of dimensio
 # ─── the ladder (steps 10 and 11) ────────────────────────────────────────────────
 SIGN_TOKEN = "SIG="                          # inside a relative's pattern: the timevarying block summarised as its sign
 WILDCARD = "*"                               # inside a relative's pattern: a dimension collapsed or annulled
-ESTIMATION_ID_COLUMN = "final_group_id"      # the final group of a series in the ladder (step 10): it lends its rate
+COMPOSITION_ID_COLUMN = "composition_id"     # the composition of a forecast series: its group after the 3 merging stages of
+                                             # the ladder (step 10); it is what is predicted, and it lends its rate
 
 # The risk level of a series: how its rate is estimated, from best to worst.
 LEVEL_OWN = "A_propio"                        # its own support is precise (≥ own_rate_floor) and it has a full year
@@ -128,7 +129,7 @@ TABLE_EXAM_TOTAL = "backtest_examen_total"             # step 14: the error of t
 
 # ─── step 13: the dynamics of the rate ───────────────────────────────────────────
 TABLE_PORTFOLIO_SEASONALITY = "estacionalidad_cartera"   # step 13: the month effect of the whole portfolio
-TABLE_POOL_DYNAMICS = "dinamica_pool"                    # step 13: φ, trend, seasonality of every estimation id
+TABLE_POOL_DYNAMICS = "composition_dynamics"   # step 13: φ, trend and seasonality of every composition
 
 # ─── the report ──────────────────────────────────────────────────────────────────
 TABLE_SERIES_CARD = "ficha_serie"            # one row per series: every attribute the framework knows about it
@@ -184,3 +185,17 @@ TOTAL_ORIGIN_SIMULATED = "pipeline_simulada"         # expected renewals of the 
 TOTAL_ORIGIN_TOTAL = "TOTAL"
 TABLE_TIME_SERIES = "time_series"            # step 20: region × month: origin, units, value, level, AUV, discount, rate
 TABLE_FORECAST_TOTAL = "forecast_total"      # step 20: year × origin and the total of every year
+
+# ─── step AUD: the audit tables (satellites of the core, for the drill-down) ───────
+TABLE_COMPOSITION = "composition"                        # every id of every stage: who forms it, support, rate, prediction
+TABLE_COMPOSITION_TECHNIQUES = "composition_techniques"  # composition × band × technique: status, errors, rank, chosen
+TABLE_CREDIBILITY = "credibility"                        # every credibility reference: support, rate, k and its parts
+TABLE_CREDIBILITY_MEMBERS = "credibility_members"        # reference × forecast series: what goes into its rate
+TABLE_SERIES_DYNAMICS = "series_dynamics"                # every forecast series: φ, trend, seasonality vs its composition
+TABLE_SERIES_BACKTEST = "series_backtest"                # forecast series × exam month × horizon × technique
+TABLE_SERIES_TECHNIQUE_SUMMARY = "series_technique_summary"   # forecast series × band × technique: errors, rank, chosen
+TABLE_COMPOSITION_FORECAST_ALL = "composition_forecast_all"   # composition × future horizon × technique: the rate of each
+TABLE_SERIES_EXAM = "series_exam"                        # every forecast series: how its chosen technique did in the exam
+TECHNIQUE_TESTED = "tested"
+TECHNIQUE_NOT_ENOUGH_HISTORY = "not_enough_history"
+TECHNIQUE_COMPOSITION_BELOW_FLOOR = "composition_below_floor"

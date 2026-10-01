@@ -12,6 +12,7 @@ Mes en curso: **2026-09** · entrenamiento ≤ 2026-05 · examen 2026-06..2026-0
 | error del TOTAL en el examen, h = 1: framework vs mejor hoja de cálculo | 2.1% vs 2.5% (hoja_mandatory) |
 | error del TOTAL en el examen, h = 6: framework vs mejor hoja de cálculo | 2.2% vs 2.9% (hoja_mandatory) |
 | error medio de la tasa por pool en el examen (corto) | 2.6 pp (retador 3.2 pp) |
+| predicciones del examen dentro de su intervalo · WAPE serie a serie | 86% de 70 · 3.9% |
 | renovado 2026: real + esperado (± cuadratura) | $410,359 ± $2,791 |
 | renovado 2027: real + esperado (± cuadratura) | $96,258 ± $2,604 |
 | TOTAL 2026 renovado + revenue time_series (pipeline 558,330 $) | $422,599 |
@@ -52,6 +53,7 @@ El extracto tiene **843 filas × 18 columnas**, de 2023-01 a 2026-12. Cada colum
 | 17 | FORECAST | 8 | 8 | 0 | 0 |  |
 | 19 | EXAM OF THE PORTFOLIO | 5 | 5 | 0 | 0 |  |
 | 20 | TIME SERIES UNIVERSE AND TOTAL | 6 | 6 | 0 | 0 |  |
+| AUD | AUDIT TABLES | 20 | 20 | 0 | 0 |  |
 | NU | CORE TABLE | 7 | 7 | 0 | 0 |  |
 | 18 | VALIDATION | 7 | 7 | 0 | 0 |  |
 
@@ -76,7 +78,7 @@ Un hueco es un mes sin vencimientos DENTRO de la historia de una serie estimable
 
 ## 3 · El soporte binomial, antes y después de la escalera
 
-La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila por azar (error binomial √(p(1−p)/n)). Con **30** contratos al mes una serie tiene evidencia para prestar; con **271** su tasa se conoce a ±5 pp y puede ir sola. **Antes**: cada serie con su propio soporte. **Después**: la escalera junta las series pasada a pasada (signo, extras y dimensiones mandatory en el orden de colapso) hasta que cada grupo llega a 30; el grupo presta su tasa a sus series y, por debajo de 271, la mezcla con la de una referencia más amplia por credibilidad. Ver `DOC_escalera.md`.
+La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila por azar (error binomial √(p(1−p)/n)). Con **30** contratos al mes una serie tiene evidencia para prestar; con **271** su tasa se conoce a ±5 pp y puede ir sola. **Antes**: cada serie con su propio soporte. **Después**: la escalera junta las series pasada a pasada (signo, extras y dimensiones mandatory en el orden de colapso) hasta que cada grupo llega a 30; el grupo presta su tasa a sus series y, por debajo de 271, la mezcla con la de una referencia más amplia por credibilidad (etapa 4). Ver `DOC_escalera.md` y `DOC_modelo_datos.md`.
 
 **Antes · el dinero por soporte propio (el dial):**
 
@@ -94,7 +96,16 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 | error de la tasa (90 %), ponderado por USD | 5.3 | 4.6 |
 | % del USD con la tasa conocida a ±5 pp | 91.4 | 93.3 |
 
-**Pasada a pasada · cómo mejora el soporte** (cada pasada es un reparto: las unidades que vencen suman lo mismo en todas; los grupos son menos y más grandes; pct_usd_floor / pct_usd_own_rate: dinero por predecir en grupos que llegan a 30 / a 271):
+**Etapa a etapa · cómo mejora el soporte** (0 raw · 1 signo · 2 extras · 3 colapso = la composición con la que se predice; agrupando por el id de cada etapa, las unidades que vencen suman lo mismo):
+
+| stage | stage_name | groups | median_group_support | units_due | pct_usd_floor | pct_usd_own_rate |
+|---|---|---|---|---|---|---|
+| 0 | raw | 14 | 12.00 | 72,652.00 | 94.7% | 92.7% |
+| 1 | sign | 11 | 40.00 | 72,652.00 | 97.4% | 92.7% |
+| 2 | extras | 11 | 40.00 | 72,652.00 | 97.4% | 92.7% |
+| 3 | collapse | 9 | 42.00 | 72,652.00 | 99.4% | 92.7% |
+
+**Pasada a pasada · el detalle dentro de cada etapa** (cada pasada es un reparto: las unidades que vencen suman lo mismo en todas; los grupos son menos y más grandes; pct_usd_floor / pct_usd_own_rate: dinero por predecir en grupos que llegan a 30 / a 271):
 
 | ladder_step | step_name | groups | open_groups | median_group_support | units_due | pct_usd_floor | pct_usd_own_rate |
 |---|---|---|---|---|---|---|---|
@@ -141,7 +152,7 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 
 **Los pools con soporte, uno a uno:**
 
-| final_group_id | meses | phi | tendencia_pp_ano | estacional | amplitud_pp | meses_alto | meses_bajo | usd_por_predecir |
+| composition_id | meses | phi | tendencia_pp_ano | estacional | amplitud_pp | meses_alto | meses_bajo | usd_por_predecir |
 |---|---|---|---|---|---|---|---|---|
 | EU|A|0|0|0|0|web | 44 | 5.11 | -0.25 | 1 | 11.70 | 2,3,4,5 | 7,9,10,11,12 | 63,360.00 |
 | NA|B|0|0|0|0|web | 44 | 1.52 | -0.40 | 0 | 5.67 |  |  | 57,600.00 |
@@ -228,6 +239,19 @@ Los pools juzgados cubren el **99%** del dinero por predecir; el resto toma el r
 | 2026-07 | 6 | 1,059.000 | 1,091.968 | 0.031 | 1,121.604 | 0.059 | 1,143.632 | 0.080 |
 | 2026-08 | 1 | 1,109.000 | 1,126.161 | 0.015 | 1,126.293 | 0.016 | 1,143.761 | 0.031 |
 | 2026-08 | 6 | 1,109.000 | 1,131.004 | 0.020 | 1,140.085 | 0.028 | 1,169.878 | 0.055 |
+
+**Cuánto acertamos, forecast serie a forecast serie** (la técnica elegida de cada serie, en cada mes de examen y horizonte, aplicada a su propia pipeline; cada predicción con su intervalo, construido como la banda del forecast; en_intervalo: proporción de predicciones cuyo valor real cayó dentro). Cruzado por el tipo de serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad, solo donde son medibles:
+
+| segmento | series | predicciones | en_intervalo | wape | sesgo |
+|---|---|---|---|---|---|
+| todas las series examinadas | 12 | 70 | 86% | 3.9% | +1.6% |
+| volatilidad baja (φ ≤ 1,5) | 7 | 40 | 88% | 23.9% | +5.9% |
+| volatilidad alta (φ > 1,5) | 5 | 30 | 83% | 3.1% | +1.4% |
+| con tendencia (medible) | 1 | 6 | 83% | 6.2% | +1.8% |
+| sin tendencia (medible) | 4 | 22 | 91% | 2.4% | +1.3% |
+| estacional (medible) | 1 | 6 | 100% | 1.5% | +0.5% |
+| no estacional (medible) | 4 | 22 | 86% | 4.5% | +2.1% |
+| dinámica no medible (poco soporte o historia) | 7 | 42 | 83% | 26.1% | +7.3% |
 
 
 ## 6 · La revalorización: a qué precio se renueva
