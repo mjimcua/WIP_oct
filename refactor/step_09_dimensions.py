@@ -36,7 +36,7 @@ Actions (logged as they are done):
 Checks (logged as they are made, numbered, at the level of their status):
    1. the base has at least 3 series (else every figure is 0)       (warning only)
    2. every figure is between 0 and 1
-   3. every mandatory dimension has one collapse position, 1 to M
+   3. every mandatory dimension with variation has one collapse position, 1 to K (one without variation: 0, no pass)
    4. a *_level_N never collapses before its *_level_(N+1)
    5-6. tables sff_decision_eta2 and sff_decision_eta2_pares written and read back
 
@@ -209,7 +209,12 @@ def analyse_dimensions(series_rate: pd.DataFrame, series_lookup: pd.DataFrame, c
                                             f"{r2_all:.3f}")
 
     # [3] the collapse order of the mandatory dimensions
-    collapse_order = sequential_collapse_order(base, mandatory_dims)
+    # a dimension with a single value (e.g. a generated level that ended in one group) has nothing to
+    # collapse: it is not a pass of the ladder
+    without_variation = [dimension for dimension in mandatory_dims if base[dimension].nunique() <= 1]
+    if without_variation:
+        configuration.log_action(STEP_LABEL, 3, f"no variation, not a pass of the ladder: {without_variation}")
+    collapse_order = sequential_collapse_order(base, [dimension for dimension in mandatory_dims if dimension not in without_variation])
     position_of = {dimension: position for position, (dimension, _) in enumerate(collapse_order, 1)}
     loss_of = dict(collapse_order)
     decision["orden_colapso"] = decision["dimension"].map(position_of).fillna(0).astype(int)
@@ -282,20 +287,22 @@ def check_dimensions(base: pd.DataFrame, decision: pd.DataFrame, collapse_order:
                             failure_detail=f"{len(out_of_range)} dimensions with a figure outside [0, 1]",
                             examples=out_of_range)
 
-    # [3] one position per mandatory dimension, 1 to M
+    # [3] one position per mandatory dimension with variation, 1 to K; the ones without variation: 0 (no pass)
     mandatory_dims = configuration.business_mandatory_dims
-    positions = sorted(decision.loc[decision["grupo"] == "mandatory", "orden_colapso"])
-    configuration.log_check(STEP_LABEL, check_log, "every mandatory dimension has one collapse position, 1 to M",
-                            positions == list(range(1, len(mandatory_dims) + 1)),
+    positions = sorted(position for position in decision.loc[decision["grupo"] == "mandatory", "orden_colapso"] if position > 0)
+    without_variation = int((decision.loc[decision["grupo"] == "mandatory", "orden_colapso"] == 0).sum())
+    configuration.log_check(STEP_LABEL, check_log, "every mandatory dimension with variation has one collapse position, 1 to K",
+                            positions == list(range(1, len(mandatory_dims) - without_variation + 1)),
                             failure_detail=f"positions found: {positions}",
-                            context=f"{len(mandatory_dims)} mandatory dimensions")
+                            context=f"{len(positions)} with a pass · {without_variation} without variation")
 
     # [4] the hierarchy: a coarser level never goes before a finer one of its family
     position_of = {dimension: position for position, (dimension, _) in enumerate(collapse_order, 1)}
     broken = []
-    for dimension in mandatory_dims:
-        family, level = family_and_level(dimension, mandatory_dims)
-        finer = [other for other in mandatory_dims if family_and_level(other, mandatory_dims) == (family, level + 1)]
+    ordered_dims = [dimension for dimension in mandatory_dims if dimension in position_of]      # the ones that are a pass
+    for dimension in ordered_dims:
+        family, level = family_and_level(dimension, ordered_dims)
+        finer = [other for other in ordered_dims if family_and_level(other, ordered_dims) == (family, level + 1)]
         for finer_dimension in finer:
             if position_of[dimension] < position_of[finer_dimension]:
                 broken.append(f"{dimension} before {finer_dimension}")

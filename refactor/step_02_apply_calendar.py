@@ -29,7 +29,7 @@ Actions (logged as they are done):
   8. show the calendar per role, as a table
 
 Checks (logged as they are made, numbered, at the level of their status):
-   1. every row has one of the four roles
+   1. every row has one of the three roles
    2. training has at least a year of months                      (warning only)
    3. every exam month has rows                                   (warning only)
    4. the current month has pipeline                              (warning only)
@@ -40,7 +40,7 @@ Checks (logged as they are made, numbered, at the level of their status):
    9. the s0_ columns hold the raw's renewals and pipeline, untouched
   10. the table sff_calendario is written and read back
 
-Output: a copy of the raw with four new columns (rol, es_mes_en_curso, s0_renovados_*),
+Output: a copy of the raw with six new columns (rol, es_mes_en_curso, s0_renovados_*, s0_vencen_*),
 and the table sff_calendario (one row per month: its role and its money).
 """
 
@@ -49,6 +49,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config, is_one_year
+from report_queries import calendar_query, roles_query
 from vocabulario import (CALENDAR_ROLE_COLUMN, CURRENT_MONTH_COLUMN, ROLE_PROJECTION,
                          ROLE_TEST, ROLE_TRAIN, ROLES_IN_ORDER, S0_RENEWED_UNITS_COLUMN, S0_RENEWED_USD_COLUMN,
                          TABLE_CALENDAR, S0_PIPELINE_UNITS_COLUMN, S0_PIPELINE_USD_COLUMN)
@@ -69,7 +70,8 @@ STEP_ACTIONS = ["keep the raw's renewals and pipeline in the s0_ columns",
                 "build the calendar table (one row per month) and write it (check 10)",
                 "count the checks; stop if any failed",
                 "show the calendar per role, as a table"]
-STEP_OUTPUT = ("the raw with four new columns (rol, es_mes_en_curso, s0_renovados_unidades, s0_renovados_usd) · "
+STEP_OUTPUT = ("the raw with six new columns (rol, es_mes_en_curso, s0_renovados_unidades, s0_renovados_usd, "
+               "s0_vencen_unidades, s0_vencen_usd) · "
                "table sff_calendario (one row per month)")
 
 # ─── named constants ─────────────────────────────────────────────────────────────
@@ -187,10 +189,10 @@ def check_roles_and_calendar(calendared: pd.DataFrame, configuration: Config, ch
     """Checks 1 to 4: roles assigned, enough training, exam with data, pipeline this month."""
     period_column = configuration.period_col
 
-    # [1] every row has one of the four roles
+    # [1] every row has one of the three roles
     unknown_roles = sorted(set(calendared[CALENDAR_ROLE_COLUMN]) - set(ROLES_IN_ORDER))
     rows_per_role = calendared[CALENDAR_ROLE_COLUMN].value_counts()
-    configuration.log_check(STEP_LABEL, check_log, "every row has one of the four roles", not unknown_roles,
+    configuration.log_check(STEP_LABEL, check_log, "every row has one of the three roles", not unknown_roles,
                             failure_detail=f"unknown roles: {unknown_roles}",
                             context=" · ".join(f"{role} {int(rows_per_role.get(role, 0)):,}" for role in ROLES_IN_ORDER))
 
@@ -286,3 +288,5 @@ def log_calendar_report(calendared: pd.DataFrame, configuration: Config, months_
             "tasa_unidades": renewed_units / pipeline_units if pipeline_units > 0 else np.nan,
         })
     configuration.show_table(pd.DataFrame(summary_rows))
+    configuration.show_query(STEP_LABEL, "the calendar per role", roles_query(configuration))
+    configuration.show_query(STEP_LABEL, "the calendar per month (sff_calendario)", calendar_query(configuration))

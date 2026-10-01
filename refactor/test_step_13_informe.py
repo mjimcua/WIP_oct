@@ -48,8 +48,11 @@ def test_the_report() -> None:
     report = open(report_path, encoding="utf-8").read()
     check(report.count("\n## ") == 8 and "## 5 · Qué tal se predice la tasa" in report and "## 7 · El forecast en dinero" in report,
           "the report has its eight chapters")
-    check("Huecos añadidos: **11**" in report and "Resultados adelantados borrados" in report,
-          "the report tells the gaps filled and what was corrected in the raw")
+    check("**Los huecos:** 11 en 1 series" in report and "Resultados adelantados borrados" in report
+          and "| resultado_adelantado_borrado |" in report and "| proyectada |" in report,
+          "the report tells, in one format, the rows the framework adds or wipes (gaps, wiped, created)")
+    check("El error frente al ruido" in report and "parte_del_error_que_es_ruido" in report,
+          "the report tells how much of the exam error is noise, by size of series and for the total")
     card = results["card"]
     check(len(card) == len(results["series"]) and {"phi", "tecnica_corto", "elegida_err_pp_medio_corto", "nivel_riesgo"} <= set(card.columns),
           "the card: one row per series with dynamics, technique and exam error")

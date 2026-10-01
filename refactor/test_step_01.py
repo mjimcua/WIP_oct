@@ -101,8 +101,17 @@ def test_dimensions_and_flags() -> None:
     check_stops(lambda: validate_values(two_problems, configuration), "2. ", "every problem is reported at once")
 
 
+def test_the_weight_in_money() -> None:
+    print("Z · every flag and the unknown discount: the share of rows and the share of the USD due")
+    from main import run
+    console = console_of(lambda: run(synthetic_with()))
+    check("of rows at 1 · " in console and "of the USD due" in console and "of rows unknown · " in console,
+          "the flags and the unknown discount say how much money they weigh, not only how many rows")
+
+
 if __name__ == "__main__":
     test_the_synthetic_values_are_usable()
     test_money()
     test_dimensions_and_flags()
+    test_the_weight_in_money()
     finish()

@@ -101,7 +101,7 @@ def build_report(raw: pd.DataFrame, results: dict, configuration: Config) -> pd.
     # [2] the chapters
     headline, chapters = [], []
     chapters.append(chapter_raw(raw, results, configuration))
-    chapters.append(chapter_gaps(results, configuration))
+    chapters.append(chapter_new_rows(results, configuration))
     chapters.append(chapter_support(results, configuration, headline))
     chapters.append(chapter_dynamics(results, configuration))
     chapters.append(chapter_precision(results, configuration, headline))
@@ -218,20 +218,76 @@ def chapter_raw(raw: pd.DataFrame, results: dict, configuration: Config) -> str:
     return "\n".join(lines) + "\n"
 
 
-def chapter_gaps(results: dict, configuration: Config) -> str:
-    rated = results["rated_units"]
-    gaps = rated[rated[SYNTHETIC_COLUMN] == 1]
+def chapter_new_rows(results: dict, configuration: Config) -> str:
+    """Chapter 2: every row the framework adds or wipes, in one format (step 21), and the series with most gaps."""
+    lines = ["## 2 · Las filas que añade (y borra) el framework", "",
+             "El forecast no usa el extracto tal cual. Añade o borra filas de cuatro tipos, cada uno por un motivo:", "",
+             "- **hueco** (paso 08): una forecast unit sin nada que vencer, añadida DENTRO de la historia de una serie "
+             "estimable para que su serie mensual no tenga agujeros (las técnicas leen meses consecutivos: una tendencia, una "
+             "estación, una media móvil). Todas sus medidas son 0 y su tasa queda **nula, nunca 0 %**: añade un mes, no dinero.",
+             "- **resultado_adelantado_borrado** (paso 02): una renovación ya registrada desde el mes en curso; el mes no "
+             "ha terminado, y el forecast la predice.",
+             "- **pipeline_parcial_borrada** (paso 02): la pipeline de las licencias de 1 año que vencen 12 meses después "
+             "del mes en curso o más tarde. La generan las ventas y renovaciones desde el mes en curso, que solo han empezado "
+             "(el mes va por la mitad y los siguientes no han empezado): está a medio crear. Si se dejara, el forecast de "
+             "esos meses se calcularía sobre una pipeline a medias; el paso 17 la reconstruye entera.",
+             "- **proyectada** y **simulada** (paso 17): las renovaciones esperadas de las licencias de 1 año que vencen en la "
+             "ventana de simulación, y la captación simulada; vencen 12 meses después y sustituyen a la pipeline borrada.", ""]
+    new_rows = results.get("new_rows")
+    if new_rows is not None and len(new_rows):
+        totals = totals_of_new_rows(new_rows)
+        lines += ["**Por origen:**", "", markdown_table(totals, 0), ""]
+        future = new_rows[new_rows["origen"] != "hueco"]
+        if len(future):
+            lines += ["**Mes a mes, lo borrado y lo creado** (las unidades y el dinero que vencen; `esperado_usd`: lo que el "
+                      "forecast espera renovar de las filas creadas):", "", markdown_table(future, 0), ""]
     rate_summary = results["series_rate"]
     with_gaps = rate_summary[rate_summary["huecos"] > 0].sort_values("huecos", ascending=False)
     history_months = rate_summary["meses_historia"].sum()
-    lines = ["## 2 · Huecos rellenados", "",
-             "Un hueco es un mes sin vencimientos DENTRO de la historia de una serie estimable. Un mes sin vencimientos "
-             "no dice nada de la tasa: su tasa queda **nula, nunca 0 %**, y el mes aparece como fila explícita con medidas a 0 "
-             "para que la historia de la serie esté completa y las sumas sigan cuadrando.", "",
-             f"- Huecos añadidos: **{len(gaps):,}** en **{len(with_gaps):,} series**, el "
-             f"{len(gaps) / history_months if history_months else 0:.1%} de los meses de historia.", "",
-             markdown_table(with_gaps.head(TOP_ROWS)[[SERIES_ID_COLUMN, "meses_historia", "huecos", "n_propio", "usd_por_predecir"]], 0)]
+    lines += [f"**Los huecos:** {int(with_gaps['huecos'].sum()):,} en {len(with_gaps):,} series, el "
+              f"{with_gaps['huecos'].sum() / history_months if history_months else 0:.1%} de los meses de historia. "
+              f"Las series con más huecos:", "",
+              markdown_table(with_gaps.head(TOP_ROWS)[[SERIES_ID_COLUMN, "meses_historia", "huecos", "n_propio", "usd_por_predecir"]], 0)]
     return "\n".join(lines) + "\n"
+
+
+def totals_of_new_rows(new_rows: pd.DataFrame) -> pd.DataFrame:
+    """One row per origin: months, rows, units, USD and USD expected (the same format as step 21)."""
+    rows = []
+    for origin, block in new_rows.groupby("origen", sort=False):
+        rows.append({"origen": origin, "meses": f"{block['mes'].min()}..{block['mes'].max()}", "filas": int(block["filas"].sum()),
+                     "unidades": float(block["unidades"].sum()), "usd": float(block["usd"].sum()),
+                     "esperado_usd": float(block["esperado_usd"].sum()) if block["esperado_usd"].notna().any() else np.nan})
+    return pd.DataFrame(rows)
+
+
+def exam_error_against_noise(results: dict):
+    """The exam error against the binomial noise, by size of the series (contracts due in the month) and for
+    the total of the portfolio: what share of the error is noise no prediction can remove."""
+    series_exam = results.get("series_exam")
+    if not series_exam:
+        return None, None
+    detail = series_exam["detail"]
+    detail = detail[detail["method"].isin(["raw", "framework"])].copy()
+    detail["tamano"] = pd.cut(detail["due_units"], [0, 30, 271, np.inf], right=False,
+                              labels=["< 30 al mes", "30-270 al mes", "≥ 271 al mes"])
+    rows = []
+    for (size, method), block in detail.groupby(["tamano", "method"], observed=True):
+        rmse, noise = float(np.sqrt((block["err_pp"] ** 2).mean())), float(np.sqrt((block["noise_pp"] ** 2).mean()))
+        rows.append({"tamano": str(size), "metodo": method, "predicciones": len(block), "error_pp": rmse, "ruido_pp": noise,
+                     "error_vs_ruido": rmse / noise if noise > 0 else np.nan,
+                     "parte_del_error_que_es_ruido": min(1.0, noise ** 2 / rmse ** 2) if rmse > 0 else np.nan})
+    by_size = pd.DataFrame(rows)
+    # the total of the portfolio, every exam month and horizon: its error and its noise, in pp of the rate
+    total_rows = []
+    for (month, horizon, method), block in detail.groupby(["period", "h", "method"]):
+        due = block["due_units"].sum()
+        total_rows.append({"metodo": method, "error_pp": 100 * (block["pred_units"].sum() - block["real_units"].sum()) / due,
+                           "ruido_pp": 100 * np.sqrt((block["pred_rate"] * (1 - block["pred_rate"]) * block["due_units"]).sum()) / due})
+    total = pd.DataFrame(total_rows).groupby("metodo").agg(error_pp=("error_pp", lambda values: float(np.sqrt((values ** 2).mean()))),
+                                                           ruido_pp=("ruido_pp", lambda values: float(np.sqrt((values ** 2).mean()))))
+    total["error_vs_ruido"] = total["error_pp"] / total["ruido_pp"]
+    return by_size, total.reset_index()
 
 
 def chapter_support(results: dict, configuration: Config, headline: list) -> str:
@@ -382,6 +438,16 @@ def chapter_precision(results: dict, configuration: Config, headline: list) -> s
              "wape_series: serie a serie, sin compensaciones):", "",
              markdown_table(results["portfolio_exam_summary"], 3) if results.get("portfolio_exam_summary") is not None else "",
              markdown_table(results["portfolio_exam"], 3) if results.get("portfolio_exam") is not None else ""]
+    by_size, total = exam_error_against_noise(results)
+    if by_size is not None and len(by_size):
+        lines += ["", "**El error frente al ruido** (la regla del ruido: una diferencia menor que el ruido no es una diferencia; "
+                  "un error del tamaño del ruido no es un fallo, es el límite). `ruido_pp`: lo que se equivocaría una predicción "
+                  "perfecta, √(p(1−p)/n). `error_vs_ruido` ≈ 1: al límite; claramente mayor que 1: falta algo que se podía saber. "
+                  "`parte_del_error_que_es_ruido`: la parte del error que ninguna predicción puede quitar. Por tamaño de la serie:", "",
+                  markdown_table(by_size.assign(parte_del_error_que_es_ruido=by_size["parte_del_error_que_es_ruido"].map("{:.0%}".format)), 2),
+                  "", "Y el **total de la cartera** en cada mes de examen, con el mismo cálculo: al juntar todo el volumen, el ruido baja "
+                  "con la raíz del tamaño, y lo que queda por encima del ruido es error del modelo:", "",
+                  markdown_table(total, 3)]
     precision_by_type = exam_precision_by_series_type(results)
     if precision_by_type is not None:
         overall = precision_by_type.iloc[0]

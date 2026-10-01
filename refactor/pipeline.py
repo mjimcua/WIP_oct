@@ -74,6 +74,7 @@ from step_17_forecast import assemble_forecast
 from step_18_validation import validate_chain
 from step_19_series_exam import examine_series
 from step_20_time_series import build_time_series_and_total, split_time_series_rows
+from step_21_new_rows import count_the_new_rows
 from step_audit import build_audit_tables
 from step_informe import build_report
 from step_nucleo import build_core_table
@@ -472,7 +473,7 @@ def sff_steps() -> list:
             series_exam=context["series_exam"]["per_series"])
         return {"core": core_table, "core_legend": legend, "forecast_series": dimension}
 
-    report_reads = ("raw_extract", "audit", "backtest", "contract_check", "fine_table", "forecast", "forecast_total", "ladder",
+    report_reads = ("raw_extract", "new_rows", "audit", "backtest", "contract_check", "fine_table", "forecast", "forecast_total", "ladder",
                     "money_by_level", "pool_dynamics", "pool_reference", "portfolio_dynamics", "portfolio_profile", "rated_units",
                     "series_table", "series_estimate", "series_exam", "series_rate", "time_series", "uplift_backtest",
                     "uplift_cells", "uplift_verdict", "validation", "core")
@@ -516,6 +517,10 @@ def sff_steps() -> list:
                                 "uplift_cells", "uplift_verdict", "rated_units"), ("forecast",), forecast, module="step_17_forecast"),
         Step("series_exam", "19", ("rated_units", "series_estimate", "pool_series", "backtest", "ladder"), ("series_exam",), series_exam, module="step_19_series_exam"),
         Step("time_series", "20", ("time_series_rows", "fine_table", "forecast"), ("time_series", "forecast_total"), time_series, module="step_20_time_series"),
+        Step("new_rows", "21", ("fine_table", "rated_units", "forecast"), ("new_rows",),
+             lambda context: {"new_rows": count_the_new_rows(context["fine_table"], context["rated_units"],
+                                                             context["forecast"]["forecast"], context.configuration)},
+             module="step_21_new_rows"),
         Step("audit", "AUD", ("ladder", "series_rate", "series_estimate", "rated_units", "pool_series", "pool_reference",
                               "pool_dynamics", "backtest", "forecast", "series_exam"), ("audit",), audit, module="step_audit"),
         Step("core", "NU", ("fine_table", "forecast_units", "support_bound", "rated_units", "series_table", "series_rate",

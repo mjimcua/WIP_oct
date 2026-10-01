@@ -131,6 +131,13 @@ def validate_values(validated: pd.DataFrame, configuration: Config) -> pd.DataFr
                             failure_detail=f"empty values in dimensions (rows per column): {empty_by_dimension}",
                             context=f"{len(dimension_columns(configuration))} dimensions")
 
+    # the share of rows AND the share of the USD due: a flag on many small rows weighs little in money
+    usd_due = validated[configuration.pipeline_usd_col]
+    total_usd_due = float(usd_due.sum())
+
+    def share_of_money(rows_mask) -> str:
+        return f"{usd_due[rows_mask].sum() / total_usd_due:.0%} of the USD due" if total_usd_due else "no USD due"
+
     dichotomous_columns = list(configuration.structural_timevarying_dims) + [configuration.flag_time_series_col]
     for dichotomous_column in dichotomous_columns:
         values = validated[dichotomous_column]
@@ -140,7 +147,8 @@ def validate_values(validated: pd.DataFrame, configuration: Config) -> pd.DataFr
                                 not unexpected_values and not has_nulls,
                                 failure_detail=f"{dichotomous_column} must be 0 / 1: found {unexpected_values[:10]}"
                                                f"{' and nulls' if has_nulls else ''}",
-                                context=f"{int(values.isin(ACTIVE_FLAG_VALUES).mean() * 100)} % of rows at 1")
+                                context=f"{values.isin(ACTIVE_FLAG_VALUES).mean():.0%} of rows at 1 · "
+                                        f"{share_of_money(values.isin(ACTIVE_FLAG_VALUES))}")
 
     # [4] the exact discount: a share between 0 and 1, or null (unknown)
     if configuration.discount_value_column:
@@ -152,7 +160,8 @@ def validate_values(validated: pd.DataFrame, configuration: Config) -> pd.DataFr
                                 out_of_range == 0,
                                 failure_detail=f"{out_of_range:,} rows of {configuration.discount_value_column} "
                                                f"outside [0, 1] (the discount is a share: 0.25 = 25 %)",
-                                context=f"{discount_values.isna().mean():.1%} unknown")
+                                context=f"{discount_values.isna().mean():.1%} of rows unknown · "
+                                        f"{share_of_money(discount_values.isna())}")
     else:
         configuration.log_action(STEP_LABEL, 4, "no exact discount declared: nothing to check")
 

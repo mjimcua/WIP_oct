@@ -75,6 +75,7 @@ import numpy as np
 import pandas as pd
 
 from config import ACTIVE_FLAG_VALUES, Config, join_columns, parse_month
+from report_queries import forecast_total_query
 from vocabulario import (CALENDAR_ROLE_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL,
                          PIPELINE_SIMULATED, TABLE_FORECAST_TOTAL, TABLE_TIME_SERIES, TOTAL_ORIGIN_EXPECTED,
                          TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_RENEWED, TOTAL_ORIGIN_SIMULATED, TOTAL_ORIGIN_TOTAL,
@@ -242,6 +243,7 @@ def build_time_series_and_total(time_series_rows: pd.DataFrame, fine_table: pd.D
     # [9] the total and the regions
     configuration.log_action(STEP_LABEL, 9, "the total by year × origin (usd_vence: pipeline; usd_renovado: renewals / revenue):")
     configuration.show_table(total)
+    configuration.show_query(STEP_LABEL, "the total by year and origin (sff_forecast_total)", forecast_total_query(configuration))
     if len(projected):
         configuration.logger.doc(f"[{STEP_LABEL}] the {TOP_REGIONS_SHOWN} regions with the most projected value:")
         configuration.show_table(projected.join(levels_of_region, on=region).groupby(region_columns)

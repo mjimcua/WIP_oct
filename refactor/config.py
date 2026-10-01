@@ -238,7 +238,9 @@ class Config:
                                                       # right after it, when the Config is built
     levels_path: Optional[str] = None                 # the JSON of the generated groups (None: <output_folder>/sff_levels.json);
                                                       # a later run reuses it; delete it to regenerate
-    level_merge_max_pp: float = 5.0                   # two neighbouring values merge while their rates differ by at most this
+    level_merge_max_pp: Optional[float] = None        # two neighbouring values merge while their standardised rates differ
+                                                      # by at most this (pp). None: the binomial noise of a series at the
+                                                      # support floor, 100·√(p(1−p)/support_floor), p = the training rate
     save_checkpoints: bool = True                     # every step saves its tables, so a later run can start from any step
     checkpoint_folder: Optional[str] = None           # where (None: <output_folder>/checkpoints); one .pkl per table + manifest
     structural_timevarying_dims: dict = field(default_factory=dict)   # column → "negative" | "positive"
@@ -539,6 +541,10 @@ class Config:
                        failure_detail=f"{len(persisted_frame):,} rows written but {rows_read_back:,} read back from {destination}",
                        context=f"{rows_read_back:,} rows × {len(persisted_frame.columns)} columns → "
                                f"{destination} ({elapsed_seconds:.1f}s)")
+
+    def show_query(self, step_label: str, what: str, sql: str) -> None:
+        """The SQL that reproduces an aggregated report from the tables the run writes (report_queries.py)."""
+        self.logger.doc(f"[{step_label}] {what}: the SQL that reproduces it from the tables of the run:\n{sql}")
 
     def show_table(self, table: pd.DataFrame) -> None:
         """Concrete rows (examples) as a pandas table, never through the logger: rendered

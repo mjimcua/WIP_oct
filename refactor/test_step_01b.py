@@ -86,8 +86,32 @@ def test_the_rules() -> None:
           "with the level made, the mandatory role lists it after its column")
 
 
+def test_the_merge_threshold_and_its_evidence() -> None:
+    print("D · the merge threshold comes from the support floor; the evidence is on screen")
+    import numpy as np
+    import re
+    configuration = leveled()
+    results = {}
+    console = re.sub(r"\x1b\[[0-9;]*m", "", console_of(lambda: results.update(run(configuration))))
+    stored = json.load(open(configuration.levels_path, encoding="utf-8"))["dims"]["product"]
+    rate = stored["criterion"]["global_rate"]
+    check(abs(stored["criterion"]["threshold_pp"] - round(100 * np.sqrt(rate * (1 - rate) / configuration.support_floor), 2)) < 0.01
+          and "the binomial noise of a series at the support floor" in console,
+          "by default, two values merge while they differ by less than the binomial noise of a series at the floor")
+    check(all("noise_pp" in value and value["rate_by_year"] for value in stored["values"]) and stored["decisions"],
+          "the JSON keeps every value (its rate, its noise, its years) and every merge decision")
+    check("what a difference in pp means" in console and "rate_2024" in console and "within_5_pp" in console,
+          "on screen: the noise per size of series, the rate per year of every group and value, and the decisions")
+    console = console_of(lambda: run(synthetic_with(leveled_dims={"product": "nominal"}, levels_path=configuration.levels_path,
+                                                    level_merge_max_pp=20)))
+    check("generating ['product']" in console, "a JSON made with another threshold is generated again")
+    check("ONE group" in console and "no variation, not a pass of the ladder: ['product_level_1']" in console,
+          "a dimension that ends in one group is told on screen and gets no pass of the ladder")
+
+
 if __name__ == "__main__":
     test_the_config()
     test_the_levels()
     test_the_rules()
+    test_the_merge_threshold_and_its_evidence()
     finish()

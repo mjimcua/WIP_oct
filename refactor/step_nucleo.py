@@ -169,7 +169,12 @@ SERIES_VALUES_EXAM = [("framework_mae_pp", "s19_exam_mae_pp", "19", "mean absolu
                       ("framework_coverage", "s19_exam_coverage", "19", "share of its framework predictions whose real rate fell inside the interval"),
                       ("raw_mae_pp", "s19_raw_mae_pp", "19", "the same error predicting the series alone with its own history (raw)"),
                       ("raw_coverage", "s19_raw_coverage", "19", "share of its raw predictions inside their interval"),
-                      ("improvement_mae_pp", "s19_improvement_mae_pp", "19", "raw error − framework error (pp): + the framework predicts it better")]
+                      ("improvement_mae_pp", "s19_improvement_mae_pp", "19", "raw error − framework error (pp): + the framework predicts it better"),
+                      ("framework_rmse_pp", "s19_exam_rmse_pp", "19", "root mean square error of its rate in the exam, framework (pp)"),
+                      ("framework_noise_pp", "s19_exam_noise_pp", "19", "binomial noise of its monthly rate: the error of a perfect prediction (pp)"),
+                      ("framework_error_over_noise", "s19_exam_error_over_noise", "19",
+                       "framework error / noise: ≈ 1 at the limit · well above 1, something knowable is missing"),
+                      ("raw_error_over_noise", "s19_raw_error_over_noise", "19", "the same for the series alone (raw)")]
 # … and as counts and units: in the dimension a SUM over any filter counts every forecast series once
 SERIES_SUMMABLE_EXAM = [("framework_predictions", "s19_exam_predictions", "19", "exam predictions (SUM)"),
                         ("framework_in_band", "s19_exam_in_band", "19", "framework predictions inside their interval (SUM)"),

@@ -13,6 +13,11 @@ with something due is predicted by three methods, on the same rows:
                of levels known at the origin; a series with no composition: its mandatory cell
   hoja_<grain> the spreadsheet: the rate of the last baseline_months closed months per grain
 
+Every prediction also carries the BINOMIAL NOISE of the real rate it tries to hit, √(p(1−p)/units due)
+with p its predicted rate: the error that even a perfect prediction would make (the noise rule: an error
+of the size of the noise is the limit, not a failure). error_over_noise = RMS error / RMS noise: about 1,
+the prediction is at the limit; well above 1, something knowable is missing; well below 1, suspicious.
+
 Every prediction keeps its steps (composition rate, shift, series rate) and, for raw and framework,
 its INTERVAL, built as the forecast builds its band (prediction.py): the error quantiles of the
 technique × the binomial error with the series' own units due. A prediction is IN THE INTERVAL when
@@ -47,6 +52,7 @@ import pandas as pd
 
 from config import Config, join_columns
 from prediction import band_quantiles, levels_at_origins, predict_composition, rate_band, shifted_rate
+from report_queries import exam_by_month_query, exam_summary_query
 from step_14_backtest import band_of_horizon
 from techniques import CATALOGUE, logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, METHOD_FRAMEWORK, RATE_COLUMN, ROLE_TEST,
@@ -170,6 +176,9 @@ def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, poo
     configuration.log_action(STEP_LABEL, 7, "the methods on the same rows (error_total: of the sum of the portfolio; wape_series: "
                                             "series by series, no compensation):")
     configuration.show_table(summary)
+    configuration.show_query(STEP_LABEL, "the exam per method and horizon", exam_summary_query(configuration))
+    configuration.show_query(STEP_LABEL, "the total of every exam month per method (sff_examen_cartera)",
+                             exam_by_month_query(configuration, methods))
     return dict(detail=detail, per_series=per_series, by_month=by_month, summary=summary)
 
 
@@ -265,12 +274,15 @@ def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_tru
     predictions["pred_units"] = predictions["pred_rate"] * predictions["due_units"]
     predictions["err_units"] = predictions["pred_units"] - predictions["real_units"]
     predictions["err_pp"] = 100 * (predictions["pred_rate"] - predictions["real_rate"])
+    # the noise of the rate it tries to hit: what even a perfect prediction would miss by
+    predictions["noise_pp"] = 100 * np.sqrt(np.clip(predictions["pred_rate"] * (1 - predictions["pred_rate"]), 0, None)
+                                            / predictions["due_units"].clip(lower=1))
     has_interval = predictions["band_low"].notna()
     predictions["in_band"] = np.where(has_interval, ((predictions["real_rate"] >= predictions["band_low"] - 1e-12)
                                                      & (predictions["real_rate"] <= predictions["band_high"] + 1e-12)).astype(float), np.nan)
     return predictions[[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN, period, "h", "tramo_h", "origin", "method", "technique",
                         "composition_rate", "credibility_shift_logit", "pred_rate", "band_low", "band_high", "real_rate",
-                        "due_units", "pred_units", "real_units", "err_units", "err_pp", "in_band"]]
+                        "due_units", "pred_units", "real_units", "err_units", "err_pp", "noise_pp", "in_band"]]
 
 
 def errors_per_series(detail: pd.DataFrame, configuration: Config) -> pd.DataFrame:
@@ -284,7 +296,10 @@ def errors_per_series(detail: pd.DataFrame, configuration: Config) -> pd.DataFra
         summary = pd.DataFrame({"predictions": grouped.size(), "in_band": grouped["in_band"].sum(),
                                 "pred_units": grouped["pred_units"].sum(), "real_units": grouped["real_units"].sum(),
                                 "abs_err_units": grouped["abs_err_units"].sum(), "mae_pp": grouped["abs_err_pp"].mean(),
-                                "bias_pp": grouped["err_pp"].mean()})
+                                "bias_pp": grouped["err_pp"].mean(),
+                                "rmse_pp": np.sqrt(block.assign(_e2=block["err_pp"] ** 2).groupby(SERIES_ID_COLUMN)["_e2"].mean()),
+                                "noise_pp": np.sqrt(block.assign(_n2=block["noise_pp"] ** 2).groupby(SERIES_ID_COLUMN)["_n2"].mean())})
+        summary["error_over_noise"] = summary["rmse_pp"] / summary["noise_pp"].where(summary["noise_pp"] > 0)
         summary["wape"] = summary["abs_err_units"] / summary["real_units"].where(summary["real_units"] > 0)
         summary["coverage"] = summary["in_band"] / summary["predictions"]
         frames.append(summary.add_prefix(f"{method}_"))
@@ -321,5 +336,7 @@ def errors_of_the_total(detail: pd.DataFrame, methods: list, configuration: Conf
             summary_rows.append({"metodo": method, "h": horizon, "error_total_medio": float(month_errors.abs().mean()),
                                  "sesgo_total_medio": float(month_errors.mean()),
                                  "wape_series": float(rows["err_units"].abs().sum() / rows["real_units"].sum()),
+                                 "error_vs_ruido": float(np.sqrt((rows["err_pp"] ** 2).mean()) / np.sqrt((rows["noise_pp"] ** 2).mean()))
+                                                   if (rows["noise_pp"] > 0).any() else np.nan,
                                  "en_intervalo": float(rows["in_band"].mean()) if rows["in_band"].notna().any() else np.nan})
     return by_month, pd.DataFrame(summary_rows).sort_values(["h", "error_total_medio"]).reset_index(drop=True)

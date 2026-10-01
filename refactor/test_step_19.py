@@ -42,6 +42,11 @@ def test_the_series_exam() -> None:
     check({"raw_mae_pp", "framework_mae_pp", "improvement_mae_pp", "raw_coverage", "framework_coverage"} <= set(per_series.columns)
           and per_series["fs_id"].is_unique,
           "per forecast series, raw and framework side by side: the improvement is one subtraction")
+    expected_noise = 100 * np.sqrt(framework["pred_rate"] * (1 - framework["pred_rate"]) / framework["due_units"].clip(lower=1))
+    check(np.allclose(framework["noise_pp"], expected_noise), "every prediction carries the binomial noise of the rate it tries to hit")
+    check({"framework_rmse_pp", "framework_noise_pp", "framework_error_over_noise", "raw_error_over_noise"} <= set(per_series.columns)
+          and "error_vs_ruido" in summary.columns and "s19_exam_error_over_noise" in results["forecast_series"].columns,
+          "the error in units of noise: per series, per method and horizon, and in the forecast series dimension")
     by_method = summary.groupby("metodo")["wape_series"].mean()
     check(by_method["framework"] < by_method["hoja_mandatory"],
           "series by series, the framework beats the spreadsheet by mandatory cell in the synthetic")
