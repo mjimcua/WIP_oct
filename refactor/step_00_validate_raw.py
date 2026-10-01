@@ -83,10 +83,10 @@ def validate_raw(raw: pd.DataFrame, configuration: Config) -> pd.DataFrame:
                             not missing_columns,
                             failure_detail=f"columns declared in the Config but missing from the raw: {missing_columns}")
 
-    # [3] the months, and the calendar on them
-    raw_months = []
+    # [3] the months, and the calendar on them (every distinct value read once)
+    raw_months, months_by_value = [], {}
     if period_column in raw.columns and period_column not in duplicated_columns:
-        raw_months = check_months(raw, configuration, check_log)
+        raw_months, months_by_value = check_months(raw, configuration, check_log)
     else:
         configuration.log_action(STEP_LABEL, 3, f"no usable '{period_column}' column: the months cannot be read")
         configuration.log_not_evaluated(STEP_LABEL, check_log, "the months and the calendar",
@@ -96,9 +96,9 @@ def validate_raw(raw: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     configuration.log_action(STEP_LABEL, 4, "counting the checks")
     configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
 
-    # [5] the period as a monthly Period
+    # [5] the period as a monthly Period: the month of every distinct value, already read in [3], mapped onto the rows
     validated = raw.copy()
-    validated[period_column] = pd.PeriodIndex([parse_month(value) for value in validated[period_column]], freq="M")
+    validated[period_column] = pd.PeriodIndex(validated[period_column].map(months_by_value), freq="M")
     configuration.log_action(STEP_LABEL, 5, f"'{period_column}' converted to a monthly Period")
 
     # [6] what the raw is
@@ -106,8 +106,9 @@ def validate_raw(raw: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     return validated
 
 
-def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> list:
-    """Checks 5 to 10: the months can be read and the calendar fits them. Returns the sorted months."""
+def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> tuple:
+    """Checks 5 to 10: the months can be read and the calendar fits them. Returns the sorted months and
+    the month of every distinct value of the period column (read once each)."""
     period_column = configuration.period_col
     period_values = raw[period_column]
 
@@ -132,7 +133,7 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> l
     if not raw_months:
         configuration.log_not_evaluated(STEP_LABEL, check_log, "the calendar against the months of the raw",
                                         "no month could be read")
-        return raw_months
+        return raw_months, months_by_value
 
     # [7] the current month is declared (the calendar has no default date)
     try:
@@ -141,7 +142,7 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> l
         configuration.log_check(STEP_LABEL, check_log, "current_month is declared", False, failure_detail=str(error))
         configuration.log_not_evaluated(STEP_LABEL, check_log, "the calendar against the months of the raw",
                                         "no current month")
-        return raw_months
+        return raw_months, months_by_value
     configuration.log_check(STEP_LABEL, check_log, "current_month is declared", True, context=str(boundaries["current"]))
 
     # [8] the current month is inside the raw
@@ -166,7 +167,7 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> l
     configuration.log_check(STEP_LABEL, check_log, "every month between the first and the last has rows",
                             not months_without_rows,
                             failure_detail=f"months with no row at all: {months_without_rows}", blocking=False)
-    return raw_months
+    return raw_months, months_by_value
 
 
 def log_raw_report(validated: pd.DataFrame, configuration: Config, column_roles: dict, raw_months: list) -> None:

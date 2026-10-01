@@ -79,7 +79,7 @@ def production_configuration() -> Config:
         # the same as the extract's old discount_interval)
         discount_value_column="discount",
         # the other columns of the extract
-        extra_measure_cols=["total_reacquired_units", "total_reacquired_usd", "TR_AUV", "REN_AUV", "ReAC_AUV"],
+        extra_measure_cols=["total_reacquired_units", "total_reacquired_usd"],   # an AUV is USD / units: computed, not read
         ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
         # the simulation window (current month → December): what happens in it falls due in 2027
         term_column="tr_term",
