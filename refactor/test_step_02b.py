@@ -39,6 +39,23 @@ def test_the_levels() -> None:
           "the forecast series keep their compositions from one run to the next")
 
 
+def test_the_role_table() -> None:
+    print("C · the table of roles: every role of the Config, and the leveled dims, before and after step 02b")
+    from config import roles_overview
+    configuration = synthetic_with(leveled_dims={"product": {"type": "nominal"}}, extra_revalorizacion=[])
+    raw = configuration.read_raw()
+    before = roles_overview(raw.columns, configuration)
+    check({"extra_revalorizacion", "niveles generados (02b)"} <= set(before["rol"])
+          and before.set_index("rol").loc["extra_revalorizacion", "columnas"] == 0,
+          "every role is listed, also an empty one (0 columns), and the dims that will get levels")
+    raw = raw.assign(product_level_1="g", product_level_2=raw["product"])
+    configuration.business_mandatory_dims = ["region", "product_level_1", "product_level_2"]
+    after = roles_overview(raw.columns, configuration).set_index("rol")
+    check(after.loc["mandatory", "nombres"] == "region, product_level_1, product_level_2"
+          and "ya generados" in after.loc["niveles generados (02b)", "nombres"],
+          "after step 02b the mandatory role lists the generated levels, in the order of the Config")
+
+
 def test_the_rules() -> None:
     print("B · the rules: ordinal order, the place in the mandatory dims")
     check(sorted(["10 devices", "2 devices", "1 device"], key=natural_key) == ["1 device", "2 devices", "10 devices"],
@@ -52,5 +69,6 @@ def test_the_rules() -> None:
 
 if __name__ == "__main__":
     test_the_levels()
+    test_the_role_table()
     test_the_rules()
     finish()

@@ -1,112 +1,91 @@
-# La escalera de soporte (pasos 10 y 11)
+# La escalera de soporte (pasos 02b, 09, 10 y 11)
 
 ## Qué resuelve
 
-La tasa de renovación de un mes es *renovadas / vencen*. Con pocos contratos esa tasa oscila por puro azar (error binomial √(p(1−p)/n)). La escalera junta las forecast series, paso a paso, hasta que cada grupo tiene soporte suficiente. El grupo presta su tasa a sus series.
+Una forecast serie pequeña tiene una tasa mensual muy ruidosa: con 10 contratos al mes, el error binomial de un solo mes es de unos ±15 pp. La escalera la junta con las forecast series más parecidas hasta que el grupo tiene soporte, y predice con la tasa del grupo.
 
-Dos umbrales:
+## El principio: segmentar homogeneiza
 
-| Umbral | Valor | Qué significa |
-|---|---|---|
-| `support_floor` | 30 contratos al mes | hay evidencia: el grupo deja de juntarse (se **cierra**) |
-| `own_rate_floor` | 271 contratos al mes | hay precisión (±5 pp): el grupo predice solo, sin credibilidad |
+Las dimensiones separan clientes con tasas esperadas distintas. Juntar dos forecast series que solo se diferencian en una dimensión es correcto cuando **esa dimensión explica poco la renovación**: respecto a la tasa, la muestra sigue siendo homogénea. Es el ejemplo del género y la felicidad: el género separa a la población en muchos aspectos, pero si la tasa que se mide es igual en hombres y mujeres, separarla no aporta nada.
 
-## El proceso
+Formalmente es el equilibrio entre sesgo y varianza. Al predecir una serie con la tasa de un grupo mayor:
 
-```mermaid
-flowchart TD
-    A["Forecast series del raw (con huecos)<br/>id de la pasada 0 = la propia serie"] --> B{"¿Soporte del grupo ≥ 30?"}
-    B -- sí --> C["Grupo CERRADO<br/>conserva su id en todas las pasadas siguientes"]
-    B -- no --> D["Siguiente pasada<br/>1 · signo · 2 · extras · 3… · mandatory en orden de colapso"]
-    D --> E["Nuevo id: una dimensión más a '*'<br/>agrupar por el id y recalcular el soporte"]
-    E --> B
-    D -- "no quedan pasadas<br/>(o el signo ya no puede subir)" --> F["Grupo abierto al final"]
-    C --> G{"¿Soporte del grupo ≥ 271?"}
-    F --> H
-    G -- sí --> I["Predice solo · z = 1"]
-    G -- no --> H["Credibilidad con una referencia más amplia<br/>z = n / (n + k)<br/>tasa = z · grupo + (1 − z) · referencia"]
-    I --> J["El grupo presta su tasa a todas sus series"]
-    H --> J
-```
+- **se gana varianza:** el ruido binomial baja, de √(p(1−p)/n) a √(p(1−p)/N);
+- **se paga sesgo:** la diferencia real entre la tasa del grupo y la de la serie.
+
+**Juntar es correcto cuando el sesgo que se introduce es menor que el ruido que se quita.** No exige que no haya ninguna diferencia (con mucha historia cualquier diferencia pequeña es "significativa"), sino que la diferencia sea menor que lo que no se podría medir de todas formas. La tabla `sff_ladder_merges` lo comprueba en cada fusión.
+
+Por eso importa el orden: se quita primero lo que menos explica la renovación (paso 09, con las series grandes, donde la tasa se mide bien), y esa relevancia se aplica a las series pequeñas, que no tienen datos para aprenderla solas.
 
 ## Las pasadas y su orden
 
-| Pasada | Qué hace | Por qué en este orden |
+Cada pasada pone a `*` (cualquier valor) una dimensión más:
+
+| Etapa | Pasadas | Qué se quita |
 |---|---|---|
-| 0 · itself | el id es la propia serie | punto de partida: el raw con huecos |
-| 1 · sign | las señales activas (dormant, softcancel…) se resumen en su signo: `SIG=negativo` / `positivo` / `neutro` | decidido así: el signo nunca se pierde |
-| extras | una pasada por cada `extra_renovacion`, la menos informativa primero (contribución única del paso 09): su valor pasa a `*` | afinan la tasa, pero no definen el negocio |
-| mandatory | una pasada por dimensión mandatory, en el **orden de colapso** del paso 09: primero la que menos R² cuesta quitar; un `_level_2` antes que su `_level_1` | al juntar series se juntan las que renuevan parecido: el menor sesgo posible |
+| 0 · raw | 1 | nada: cada forecast serie es su propio grupo |
+| 1 · signo | 1 | las señales activas (dormant, softcancel…) se resumen en su signo; positivas y negativas nunca se juntan |
+| 2 · extras | 1 por extra | cada extra de renovación (p. ej. `net_new`, el canal) |
+| 3 · colapso | como mucho `collapse_passes` (2 por defecto) | las mandatory, la que menos explica primero; en una familia `_level_N`, primero el nivel más fino |
+| 4 · credibilidad | — | no junta series: mezcla la tasa de la composición con la de una referencia más amplia |
 
-Hay tres reglas más:
-- **Los grupos con signo** (negativo o positivo) solo siguen quitando mandatory mientras la pérdida acumulada de R² sea ≤ `signed_ladder_max_loss` (0,05).
-- **Una serie con señales de los dos signos** (mixta) nunca se junta.
-- **El proceso se para** en cuanto no queda ningún grupo abierto que pueda moverse.
+Las pasadas de colapso posteriores a `collapse_passes` no juntan series: solo sirven para buscar la referencia de credibilidad (etapa 4). Las series con signo solo suben mientras la pérdida acumulada de R² es pequeña (`signed_ladder_max_loss`); las mixtas no suben nunca.
 
-## Las 4 etapas
+## La regla mecánica
 
-Las pasadas se resumen en las 4 etapas que se leen en el núcleo (un id y un soporte por etapa y forecast serie):
+> En cada pasada, **todas** las forecast series se agrupan por el mismo patrón. Cada forecast serie usa **la primera pasada en la que su grupo llega a 30** contratos al mes (`support_floor`). Ese grupo es su **composición**.
 
-| Etapa | Qué hace | Columnas en el núcleo |
-|---|---|---|
-| 0 · raw | la forecast serie con sus huecos | `s10_stage0_id`, `s10_stage0_support` |
-| 1 · signo | une las señales por signo | `s10_stage1_id`, `s10_stage1_support` |
-| 2 · extras | anula las extras de renovación | `s10_stage2_id`, `s10_stage2_support` |
-| 3 · colapso | quita mandatory en el orden de colapso: la **composición**, con la que se predice | `s10_stage3_id`, `s10_stage3_support` |
-| 4 · credibilidad | por debajo de 271, mezcla la tasa de la composición con la de una referencia | `s11_credibility_ref_id`, `s11_ref_support`, `s11_ref_rate`, `s11_k`, `s11_z`, `s11_credibility_effect_pp` |
+- Una serie que ya llega a 30 sola se queda en la pasada 0 y predice con su propia tasa.
+- Su historia **sigue contando** en los grupos de las demás: una serie grande no se toca, pero presta sus datos a sus hermanas pequeñas.
+- Una serie que no llega a 30 en ninguna pasada permitida se queda con el grupo más amplio que tuvo y depende de la credibilidad.
 
-**Un id solo cambia cuando cambia el grupo.** Si en una pasada un grupo conserva exactamente las mismas forecast series, conserva su id aunque esa pasada haya puesto una dimensión más a `*`. Así, leyendo los ids etapa a etapa, el id cambia justo donde la forecast serie se juntó con otras. Una etapa que no aporta nada repite el id y el soporte de la anterior.
+Por eso una composición tiene dos recuentos: las series **que entran en su tasa** (`group_series`) y las series **que la usan** (`composition_users`). La tabla `sff_composition_members` las lista con su papel: `uses` o `lends`.
 
-El modelo de datos completo (núcleo, satélites, claves y sumas de comprobación) está en `DOC_modelo_datos.md`.
+## Las 4 etapas y sus ids
 
-## Cada pasada es un reparto
+Cada forecast serie tiene un id por etapa. Un id **solo cambia cuando el grupo gana series**: si una pasada no le añade nadie, conserva el id anterior. Agrupando por el id de cualquier etapa, los totales del raw suman lo mismo, porque cada serie tiene exactamente un id por etapa.
 
-En cada pasada, cada serie está en **un** grupo. Por eso agrupar por el id de cualquier pasada da los mismos totales que el raw, con menos series y más grandes. Así se puede medir cuánto mejora el soporte en cada pasada (tabla `sff_ladder_summary` y capítulo 3 del informe).
+El soporte que se informa en cada etapa es el del grupo con el que la serie predeciría: cuenta todas las series de su tasa, también las que solo prestan.
 
-## Ejemplo
+## Ejemplo (sintético)
 
-Ocho forecast series; suelo = 30. Total: **2.668** contratos al mes.
+| Forecast serie | Contratos/mes | Pasada que usa | Composición | Soporte |
+|---|---|---|---|---|
+| `NA·A·web` | 279 | 0 · raw | ella misma | 279 |
+| `NA·A·tele` | 8 | 2 · sin canal | `NA\|A\|SIG=neutro\|*` (con su hermana web, que presta) | 287 |
+| `EU·A·softcancel` | 12 | 1 · signo | `EU\|A\|SIG=negativo\|web` (las 4 negativas) | 42 |
+| `NA·B·tele` | 40 | 0 · raw | ella misma, con credibilidad hacia `NA\|B\|*` | 40 |
 
-| Serie | Región | Producto | Señal | Canal | Soporte |
-|---|---|---|---|---|---|
-| S1 | EU | Premium | neutro | web | 2.440 |
-| S2 | EU | Premium | neutro | shop | 18 |
-| S3 | EU | Premium | dormant | web | 12 |
-| S4 | EU | Premium | softcancel | web | 9 |
-| S5 | EU | Premium | dormant | shop | 10 |
-| S6 | EU | Plus | neutro | web | 150 |
-| S7 | EU | Plus | neutro | shop | 25 |
-| S8 | NA | Premium | dormant | web | 4 |
+El error de la tasa de un mes de `NA·A·tele` pasa de ±12,1 pp sola a ±3,9 pp con su composición (sesgo +3,4 pp).
 
-| Pasada | Qué pasa | Grupos | Total |
-|---|---|---|---|
-| 0 · itself | S1 (2.440) y S6 (150) llegan a 30 y se cierran | 8 | 2.668 |
-| 1 · sign | S3 + S4 → `EU\|Premium\|NEG\|web` (21) · S5 → `EU\|Premium\|NEG\|shop` (10) · S8 → `NA\|Premium\|NEG\|web` (4) | 7 | 2.668 |
-| 2 · sin canal | S3 + S4 + S5 → `EU\|Premium\|NEG\|*` (**31**, se cierra) · S2 → `EU\|Premium\|neutro\|*` (18) · S7 → `EU\|Plus\|neutro\|*` (25) | 6 | 2.668 |
-| 3 · sin producto | S2 + S7 → `EU\|*\|neutro\|*` (**43**, se cierra) · S8 → `NA\|*\|NEG\|*` (4) | 5 | 2.668 |
-| 4 · sin región | S8 → `*\|*\|NEG\|*`: sigue en 4 (las demás negativas ya están cerradas) | 5 | 2.668 |
+## Los niveles generados (paso 02b)
 
-El orden "canal → producto → región" es inventado para el ejemplo. El real lo decide el paso 09.
+Las dimensiones declaradas en `leveled_dims` (por ejemplo `tr_term` y `tr_band`) reciben dos niveles:
 
-**Credibilidad** (k = 60). La referencia de un grupo es su propio id o el de una pasada posterior, contado sobre **todas** las series, también las cerradas y las grandes. Se elige la primera candidata que tiene más series que el grupo y llega a 30.
+- **`<name>_level_2`:** el valor raw, sin tocar;
+- **`<name>_level_1`:** los valores agrupados por su tasa estandarizada.
 
-| Composición | n | Referencia | N | z | Tasa |
-|---|---|---|---|---|---|
-| S1 | 2.440 | — | — | 1 | la suya |
-| S6 | 150 | `EU\|*\|neutro\|*` (incluye S1) | 2.633 | 0,71 | 0,71 · S6 + 0,29 · referencia |
-| `EU\|Premium\|NEG\|*` | 31 | `*\|*\|NEG\|*` | 35 | 0,34 | 0,34 · grupo + 0,66 · referencia |
-| `EU\|*\|neutro\|*` | 43 | `EU\|*\|neutro\|*` con S1 y S6 | 2.633 | 0,42 | 0,42 · grupo + 0,58 · referencia |
-| S8 | 4 | `*\|*\|NEG\|*` | 35 | 0,06 | casi toda la de la referencia |
+**Cómo se forman los grupos:**
+1. Se usan solo los meses de entrenamiento.
+2. Cada valor se compara dentro de su celda, con el resto de mandatory iguales.
+3. Los valores con menos de 30 contratos al mes van a `residual`.
+4. Se juntan los vecinos más parecidos mientras su diferencia sea como mucho `level_merge_max_pp` (5 pp).
 
-**Dos tipos de id:**
-- **El id de grupo** es un reparto: suma, y es el que se predice (paso 12) y se juzga (paso 14).
-- **El id de referencia** es una fuente de tasa. Cada serie tiene una sola referencia, pero la tasa de la referencia se calcula con todas las series que encajan en ella, así que su soporte puede ser mayor que la suma de las series que la tienen asignada.
+**El JSON:**
+- La primera ejecución escribe los grupos en `levels_path` (por defecto `salida/sff_levels.json`).
+- Las siguientes lo reutilizan, así que los ids de las forecast series no cambian de un mes a otro.
+- Para regenerarlos, se borra el fichero.
+- Un valor nuevo que el fichero no conoce va a `residual`, con un aviso.
 
 ## En el forecast
 
-1. **Paso 12:** la serie mensual de cada composición (la suma de sus series).
-2. **Paso 14:** el backtest elige la técnica de cada grupo.
-3. **Paso 17:** la técnica predice la tasa del grupo en cada mes futuro. Si z < 1, esa predicción se desplaza hacia la referencia en (1 − z) de la diferencia de niveles, en escala logit: es la misma mezcla del paso 11 aplicada a la predicción. Todas las series del grupo reciben esa tasa, por su propia pipeline.
+1. **Paso 12:** la serie mensual de cada composición es la suma de **todas** las series de su tasa.
+2. **Paso 14:** el backtest elige la técnica de cada composición.
+3. **Paso 17 (`prediction.py`):** la técnica predice la tasa de la composición. Si z < 1, la predicción se desplaza hacia la referencia en (1 − z) de la diferencia de niveles, en escala logit. Cada forecast serie que la usa recibe esa tasa, aplicada a su propia pipeline.
+
+## La credibilidad (etapa 4)
+
+Si la composición tiene menos de 271 contratos al mes (`own_rate_floor`), toma como referencia la primera pasada posterior (fusionadora o no) con más series y que llega a 30. Su tasa es z × composición + (1 − z) × referencia, con z = n / (n + k) y k de Bühlmann-Straub. La z de Bühlmann es exactamente el peso que minimiza sesgo² + varianza: es el mismo principio de la escalera, aplicado de forma continua.
 
 ## Niveles de riesgo
 
@@ -120,23 +99,14 @@ El orden "canal → producto → región" es inventado para el ejemplo. El real 
 | S_signo_bajo_suelo | con signo y su grupo no llegó a 30 |
 | M_signo_mixto · D_sin_historia · N_sin_impacto | mixta · solo futuro · solo historia |
 
-## Tablas y columnas
+## Tablas
 
-| Tabla | Una fila por | Columnas clave |
+| Tabla | Una fila por | Para qué |
 |---|---|---|
-| `sff_ladder_steps` | serie × pasada | `ladder_step`, `step_name`, `group_id`, `group_support`, `closed` |
-| `sff_ladder_summary` | pasada | `groups`, `open_groups`, `median_group_support`, `units_due` (igual en todas), `pct_usd_floor`, `pct_usd_own_rate` |
-| `sff_ladder_groups` | serie estimable | `composition_id`, `final_step`, `group_series`, `group_support`, `group_rate`, `credibility_ref_id`, `credibility_ref_step`, `ref_series`, `ref_support`, `ref_rate` |
-| `sff_series_estimacion` | serie | lo anterior + `k`, `z`, `tasa_estimada`, `credibility_effect_pp`, `se_estimacion_pp`, `se_prediccion_pp`, `nivel_riesgo` |
-| `sff_nucleo` | fila | las 4 etapas (`s10_stage*`) y la credibilidad (`s11_*`): ver `DOC_modelo_datos.md` |
-| `sff_composition`, `sff_credibility`, `sff_credibility_members` | id de etapa · referencia · referencia × serie | el detalle para auditar (paso AUD) |
-
-En Power BI, `group_id` filtrado por `ladder_step` agrupa el raw tal como queda en cada pasada.
-
-## Decisión abierta
-
-Con el reparto, una serie grande se cierra en la pasada 0 y ya no acepta a nadie. Las series pequeñas solo pueden juntarse entre ellas, y a veces cruzan región o producto antes de llegar a 30.
-
-En el sintético, `NA|A|tele` acaba con las otras "tele" de EU en `*|*|SIG=neutro|*` y su tasa baja de 0,894 a 0,760. Con el modelo anterior tomaba la de su hermana grande `NA|A|web` (0,899). El examen de cartera empeora ligeramente: error del total a 6 meses de 2,06 % a 2,25 %.
-
-La alternativa es que un grupo cerrado conserve sus series pero **absorba** en pasadas posteriores las series abiertas que coinciden con él en esa pasada. El reparto se mantiene y los totales siguen sumando, pero su id se amplía.
+| `sff_dimension_levels` | dimensión × grupo | los grupos generados de `level_1`, con su tasa estandarizada por año |
+| `sff_ladder_steps` | serie × pasada | su id, el soporte de su grupo y si ya tiene composición |
+| `sff_ladder_summary` | pasada | ids, mediana de soporte, unidades (iguales en todas), % USD con soporte |
+| `sff_ladder_merges` | serie × fusión | grupo antes y después, sesgo, error sola y junta, y si mejora |
+| `sff_composition_members` | composición × serie | todas las series de su tasa, con su papel (`uses` / `lends`) |
+| `sff_ladder_groups` | serie estimable | composición, pasada, series en la tasa, series que la usan, soporte, tasa, referencia |
+| `sff_forecast_series` | forecast serie | las 4 etapas (`s10_stage*`) y la credibilidad (`s11_*`): ver `DOC_modelo_datos.md` |

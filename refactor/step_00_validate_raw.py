@@ -30,7 +30,7 @@ Output: a copy of the raw, same rows and columns, with the period as a monthly P
 # ─── imports ─────────────────────────────────────────────────────────────────────
 import pandas as pd
 
-from config import COLUMN_ROLE_IGNORE, Config, parse_month
+from config import COLUMN_ROLE_IGNORE, Config, parse_month, roles_overview
 from vocabulario import CALENDAR_ROLE_COLUMN
 
 
@@ -169,13 +169,9 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> l
 
 def log_raw_report(validated: pd.DataFrame, configuration: Config, column_roles: dict, raw_months: list) -> None:
     """Action 6: the columns by role and the calendar, rows per role, as tables."""
-    configuration.log_action(STEP_LABEL, 6, "the columns of the raw, by role:")
-    columns_by_role = {}
-    for column_name, role in column_roles.items():
-        if column_name in validated.columns:
-            columns_by_role.setdefault(role, []).append(column_name)
-    configuration.show_table(pd.DataFrame([{CALENDAR_ROLE_COLUMN: role, "columnas": len(role_columns), "nombres": ", ".join(role_columns)}
-                                           for role, role_columns in columns_by_role.items()]))
+    configuration.log_action(STEP_LABEL, 6, "the columns of the raw, by role (every role of the Config, also the empty "
+                                            "ones, and the dimensions that get generated levels in step 02b):")
+    configuration.show_table(roles_overview(validated.columns, configuration))
 
     configuration.logger.doc(f"[{STEP_LABEL}] the calendar of the Config on these months: "
                              f"{configuration.calendar_description()}")

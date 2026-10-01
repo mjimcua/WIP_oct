@@ -53,7 +53,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from config import Config, join_columns
+from config import Config, join_columns, roles_overview
 from vocabulario import CALENDAR_ROLE_COLUMN, ROLE_TRAIN, TABLE_DIMENSION_LEVELS
 
 
@@ -158,6 +158,8 @@ def apply_dimension_levels(calendared_raw: pd.DataFrame, configuration: Config) 
     # [7] the groups
     configuration.log_action(STEP_LABEL, 7, "the groups of every dimension (rate_std: standardised by cell, training months):")
     configuration.show_table(levels_table.drop(columns=["rate_by_year"], errors="ignore"))
+    configuration.logger.doc(f"[{STEP_LABEL}] the columns by role, updated with the generated levels:")
+    configuration.show_table(roles_overview(raw.columns, configuration))
     return raw
 
 

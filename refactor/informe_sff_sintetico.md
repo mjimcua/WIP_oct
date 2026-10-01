@@ -9,14 +9,14 @@ Mes en curso: **2026-09** · entrenamiento ≤ 2026-05 · examen 2026-06..2026-0
 | forecast series | 16 |
 | USD por predecir | $187,980 |
 | USD con la tasa conocida a ±5 pp: antes → después de la escalera | 91% → 93% |
-| error del TOTAL en el examen, h = 1: framework vs mejor hoja de cálculo | 2.1% vs 2.5% (hoja_mandatory) |
-| error del TOTAL en el examen, h = 6: framework vs mejor hoja de cálculo | 2.2% vs 2.9% (hoja_mandatory) |
-| error medio de la tasa por pool en el examen (corto) | 2.6 pp (retador 3.2 pp) |
-| predicciones del examen dentro de su intervalo · WAPE serie a serie | 86% de 70 · 3.9% |
-| renovado 2026: real + esperado (± cuadratura) | $410,359 ± $2,791 |
-| renovado 2027: real + esperado (± cuadratura) | $96,258 ± $2,604 |
-| TOTAL 2026 renovado + revenue time_series (pipeline 558,330 $) | $422,599 |
-| TOTAL 2027 renovado + revenue time_series (pipeline 137,639 $) | $101,477 |
+| error del TOTAL en el examen, h = 1: framework vs mejor hoja de cálculo vs serie sola | 2.1% vs 2.5% (hoja_mandatory) vs 2.2% |
+| error del TOTAL en el examen, h = 6: framework vs mejor hoja de cálculo vs serie sola | 2.2% vs 2.9% (hoja_mandatory) vs 2.2% |
+| error medio de la tasa por pool en el examen (corto) | 2.5 pp (retador 3.2 pp) |
+| examen serie a serie: dentro del intervalo · WAPE, framework frente a la serie sola (raw) | 89% vs 84% · 4.0% vs 4.2% |
+| renovado 2026: real + esperado (± cuadratura) | $410,241 ± $3,037 |
+| renovado 2027: real + esperado (± cuadratura) | $96,099 ± $3,017 |
+| TOTAL 2026 renovado + revenue time_series (pipeline 558,330 $) | $422,481 |
+| TOTAL 2027 renovado + revenue time_series (pipeline 137,521 $) | $101,317 |
 
 ## 1 · El raw y cómo lo mejoramos
 
@@ -43,7 +43,7 @@ El extracto tiene **843 filas × 18 columnas**, de 2023-01 a 2026-12. Cada colum
 | 07 | SUPPORT BOUND | 2 | 2 | 0 | 0 |  |
 | 08 | RATE SERIES | 6 | 6 | 0 | 0 |  |
 | 09 | DIMENSIONS | 6 | 6 | 0 | 0 |  |
-| 10 | LADDER GROUPS | 7 | 7 | 0 | 0 |  |
+| 10 | LADDER GROUPS | 9 | 9 | 0 | 0 |  |
 | 11 | LADDER | 6 | 6 | 0 | 0 |  |
 | 12 | POOL SERIES | 5 | 5 | 0 | 0 |  |
 | 13 | DYNAMICS OF THE RATE | 4 | 4 | 0 | 0 |  |
@@ -51,10 +51,10 @@ El extracto tiene **843 filas × 18 columnas**, de 2023-01 a 2026-12. Cada colum
 | 15 | UPLIFT | 5 | 5 | 0 | 0 |  |
 | 16 | BACKTEST OF THE UPLIFT | 3 | 3 | 0 | 0 |  |
 | 17 | FORECAST | 8 | 8 | 0 | 0 |  |
-| 19 | EXAM OF THE PORTFOLIO | 5 | 5 | 0 | 0 |  |
+| 19 | EXAM OF EVERY FORECAST SERIES | 8 | 8 | 0 | 0 |  |
 | 20 | TIME SERIES UNIVERSE AND TOTAL | 6 | 6 | 0 | 0 |  |
-| AUD | AUDIT TABLES | 20 | 20 | 0 | 0 |  |
-| NU | CORE TABLE | 7 | 7 | 0 | 0 |  |
+| AUD | AUDIT TABLES | 18 | 18 | 0 | 0 |  |
+| NU | CORE TABLE | 10 | 10 | 0 | 0 |  |
 | 18 | VALIDATION | 7 | 7 | 0 | 0 |  |
 
 **Lo que se corrigió o completó en el raw:**
@@ -102,8 +102,8 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 |---|---|---|---|---|---|---|
 | 0 | raw | 14 | 12.00 | 72,652.00 | 94.7% | 92.7% |
 | 1 | sign | 11 | 40.00 | 72,652.00 | 97.4% | 92.7% |
-| 2 | extras | 11 | 40.00 | 72,652.00 | 97.4% | 92.7% |
-| 3 | collapse | 9 | 42.00 | 72,652.00 | 99.4% | 92.7% |
+| 2 | extras | 11 | 40.00 | 72,652.00 | 99.4% | 94.7% |
+| 3 | collapse | 11 | 40.00 | 72,652.00 | 99.4% | 94.7% |
 
 **Pasada a pasada · el detalle dentro de cada etapa** (cada pasada es un reparto: las unidades que vencen suman lo mismo en todas; los grupos son menos y más grandes; pct_usd_floor / pct_usd_own_rate: dinero por predecir en grupos que llegan a 30 / a 271):
 
@@ -111,9 +111,9 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 |---|---|---|---|---|---|---|---|
 | 0 | itself | 14 | 9 | 12.00 | 72,652.00 | 94.7% | 92.7% |
 | 1 | sign | 11 | 5 | 40.00 | 72,652.00 | 97.4% | 92.7% |
-| 2 | extra channel | 11 | 5 | 40.00 | 72,652.00 | 97.4% | 92.7% |
-| 3 | without region | 10 | 4 | 41.00 | 72,652.00 | 97.4% | 92.7% |
-| 4 | without product | 9 | 2 | 42.00 | 72,652.00 | 99.4% | 92.7% |
+| 2 | extra channel | 11 | 2 | 287.00 | 72,652.00 | 99.4% | 94.7% |
+| 3 | without region | 11 | 2 | 287.00 | 72,652.00 | 99.4% | 94.7% |
+| 4 | without product | 11 | 2 | 287.00 | 72,652.00 | 99.4% | 94.7% |
 
 **Después · el dinero por nivel de riesgo** (error_pp: error de predicción del mes siguiente, ponderado por dinero):
 
@@ -121,8 +121,7 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 |---|---|---|---|---|
 | A3_propio_reforzado | 1 | 3,600.00 | 1.9% | 8.64 |
 | A_propio | 4 | 171,840.00 | 91.4% | 3.03 |
-| B_prestado | 4 | 5,040.00 | 2.7% | 16.60 |
-| C_lejano | 3 | 3,600.00 | 1.9% | 13.69 |
+| B_prestado | 7 | 8,640.00 | 4.6% | 14.75 |
 | D_sin_historia | 1 | 2,700.00 | 1.4% |  |
 | M_signo_mixto | 1 | 480.00 | 0.3% | 34.52 |
 | N_sin_impacto | 1 | 0.00 | 0.0% |  |
@@ -133,22 +132,22 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 
 φ compara lo que varía la tasa mes a mes con lo que variaría solo por muestreo: φ ≈ 1, nada que modelar (la media es la mejor técnica); φ > 1, algo la mueve (tendencia, estación, cambio de nivel o de mezcla). La estacionalidad se prueba sobre la tasa sin su tendencia (prueba F del mes del año, 5 %). Es descriptivo: no restringe ninguna técnica; el backtest decide.
 
-**Cartera completa:** **hay efecto mes** más allá del ruido (p = 0.001, amplitud 3.8 pp, consistencia entre mitades 0.76); tendencia -3.0 pp/año (p = 0.000); φ 10.9. Un φ de cartera alto con tendencia suele ser cambio de mezcla, no comportamiento.
+**Cartera completa:** **hay efecto mes** más allá del ruido (p = 0.000, amplitud 4.6 pp, consistencia entre mitades 0.80); tendencia -2.8 pp/año (p = 0.000); φ 19.1. Un φ de cartera alto con tendencia suele ser cambio de mezcla, no comportamiento.
 
 | mes | efecto_pp | error_pp | meses_observados | tasa_media |
 |---|---|---|---|---|
-| 1 | 0.28 | 0.62 | 4 | 0.73 |
-| 2 | 1.51 | 0.62 | 4 | 0.74 |
-| 3 | 0.85 | 0.62 | 4 | 0.74 |
-| 4 | 1.76 | 0.62 | 4 | 0.75 |
-| 5 | 1.00 | 0.62 | 4 | 0.74 |
-| 6 | 0.20 | 0.62 | 4 | 0.73 |
-| 7 | -0.75 | 0.62 | 4 | 0.72 |
-| 8 | 0.03 | 0.62 | 4 | 0.73 |
-| 9 | -1.51 | 0.71 | 3 | 0.71 |
-| 10 | -1.95 | 0.71 | 3 | 0.71 |
-| 11 | -2.02 | 0.71 | 3 | 0.71 |
-| 12 | -1.08 | 0.71 | 3 | 0.72 |
+| 1 | 0.68 | 0.61 | 4 | 0.77 |
+| 2 | 1.57 | 0.61 | 4 | 0.78 |
+| 3 | 0.82 | 0.61 | 4 | 0.77 |
+| 4 | 2.10 | 0.61 | 4 | 0.78 |
+| 5 | 0.73 | 0.61 | 4 | 0.77 |
+| 6 | 0.56 | 0.61 | 4 | 0.77 |
+| 7 | -0.65 | 0.61 | 4 | 0.76 |
+| 8 | -0.27 | 0.61 | 4 | 0.76 |
+| 9 | -1.71 | 0.70 | 3 | 0.75 |
+| 10 | -1.99 | 0.70 | 3 | 0.74 |
+| 11 | -2.50 | 0.70 | 3 | 0.74 |
+| 12 | -1.27 | 0.70 | 3 | 0.75 |
 
 **Los pools con soporte, uno a uno:**
 
@@ -159,8 +158,10 @@ La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila p
 | EU|B|0|0|0|0|web | 44 | 8.40 | -6.21 | 0 | 3.60 |  |  | 31,680.00 |
 | NA|A|0|0|0|0|web | 44 | 1.72 | -0.36 | 0 | 4.52 | 7 |  | 19,200.00 |
 | EU|A|SIG=negativo|web | 44 | 1.40 | 1.85 | 0 | 14.53 |  |  | 5,040.00 |
-| *|*|SIG=neutro|* | 44 | 1.61 | -2.39 | 0 | 13.73 |  |  | 3,600.00 |
 | NA|B|0|0|0|0|tele | 33 | 1.07 | -1.73 | 0 | 10.06 |  |  | 3,600.00 |
+| EU|A|SIG=neutro|* | 44 | 5.21 | -0.20 | 1 | 11.68 | 2,3,4,5 | 7,9,10,11,12 | 1,440.00 |
+| EU|B|SIG=neutro|* | 44 | 8.81 | -6.29 | 0 | 3.25 |  |  | 1,200.00 |
+| NA|A|SIG=neutro|* | 44 | 1.57 | -0.43 | 0 | 4.20 | 7 |  | 960.00 |
 
 
 ## 5 · Qué tal se predice la tasa de renovación
@@ -173,43 +174,43 @@ Los pools juzgados cubren el **99%** del dinero por predecir; el resto toma el r
 
 | tramo_h | tecnica | err_norm_medio |
 |---|---|---|
-| corto | T15_level_seasonal | 1.12 |
-| corto | T12_theta | 1.19 |
-| corto | T3_ma3 | 1.22 |
-| corto | T11_holt_winters | 1.22 |
-| corto | T9_ses | 1.24 |
-| corto | T4_ewma | 1.25 |
-| corto | T10_holt_damped | 1.26 |
-| corto | T3_ma6 | 1.33 |
-| corto | T14_temporal_cred | 1.44 |
-| corto | T2_mean | 1.58 |
-| medio_largo | T12_theta | 1.19 |
-| medio_largo | T10_holt_damped | 1.28 |
-| medio_largo | T9_ses | 1.30 |
-| medio_largo | T4_ewma | 1.33 |
-| medio_largo | T3_ma6 | 1.33 |
-| medio_largo | T3_ma3 | 1.34 |
-| medio_largo | T15_level_seasonal | 1.35 |
-| medio_largo | T11_holt_winters | 1.45 |
-| medio_largo | T14_temporal_cred | 1.47 |
-| medio_largo | T2_mean | 1.64 |
+| corto | T15_level_seasonal | 1.11 |
+| corto | T11_holt_winters | 1.13 |
+| corto | T12_theta | 1.17 |
+| corto | T3_ma3 | 1.20 |
+| corto | T10_holt_damped | 1.22 |
+| corto | T9_ses | 1.22 |
+| corto | T4_ewma | 1.27 |
+| corto | T3_ma6 | 1.38 |
+| corto | T14_temporal_cred | 1.61 |
+| corto | T2_mean | 1.87 |
+| medio_largo | T12_theta | 1.27 |
+| medio_largo | T10_holt_damped | 1.38 |
+| medio_largo | T3_ma6 | 1.45 |
+| medio_largo | T9_ses | 1.45 |
+| medio_largo | T3_ma3 | 1.46 |
+| medio_largo | T15_level_seasonal | 1.48 |
+| medio_largo | T4_ewma | 1.48 |
+| medio_largo | T11_holt_winters | 1.54 |
+| medio_largo | T14_temporal_cred | 1.69 |
+| medio_largo | T2_mean | 1.97 |
 
 **Elecciones:**
 
 | tramo_h | tecnica_origen | ids |
 |---|---|---|
 | corto | campeon | 4 |
-| corto | retador | 3 |
+| corto | retador | 5 |
 | corto | sin_soporte | 2 |
-| medio_largo | campeon | 7 |
+| medio_largo | campeon | 9 |
 | medio_largo | sin_soporte | 2 |
 
 **Precisión en el examen por tramo** (error medio de la tasa en pp, ponderado por dinero; dentro_banda: proporción de errores dentro de la banda del 90 %):
 
 | tramo | pools | error_elegida_pp | error_retador_pp | sesgo_elegida_pp | dentro_banda |
 |---|---|---|---|---|---|
-| corto | 7 | 2.63 | 3.22 | 1.56 | 95.2% |
-| medio_largo | 7 | 2.28 | 2.97 | 0.93 | 100.0% |
+| corto | 9 | 2.50 | 3.19 | 1.42 | 85.2% |
+| medio_largo | 9 | 2.14 | 2.89 | 0.78 | 100.0% |
 
 **Precisión en el examen por nivel de riesgo** (tramo corto):
 
@@ -217,41 +218,42 @@ Los pools juzgados cubren el **99%** del dinero por predecir; el resto toma el r
 |---|---|---|---|---|
 | A3_propio_reforzado | 1 | 3,600.00 | 9.31 | 8.42 |
 | A_propio | 4 | 171,840.00 | 2.16 | 2.89 |
-| B_prestado | 4 | 5,040.00 | 9.78 | 9.78 |
-| C_lejano | 3 | 3,600.00 | 8.38 | 4.73 |
+| B_prestado | 7 | 8,640.00 | 6.58 | 6.96 |
 
-**La cartera en el examen, serie a serie: el framework frente a la hoja de cálculo** (paso 19; cada serie predicha como la predice el forecast, con solo lo que se sabía h meses antes; la hoja: la tasa de los últimos 12 meses por grano × la pipeline real; error_total: de la suma de la cartera; wape_series: serie a serie, sin compensaciones):
+**La cartera en el examen, serie a serie: el framework frente a la serie sola (raw) y a la hoja de cálculo** (paso 19; cada serie predicha como la predice el forecast, con solo lo que se sabía h meses antes; raw: la serie con su propia historia, sin escalera; la hoja: la tasa de los últimos 12 meses por grano × la pipeline real; error_total: de la suma de la cartera; wape_series: serie a serie, sin compensaciones):
 
-| metodo | h | error_total_medio | sesgo_total_medio | wape_series |
-|---|---|---|---|---|
-| framework | 1 | 0.021 | 0.021 | 0.042 |
-| hoja_mandatory | 1 | 0.025 | 0.019 | 0.051 |
-| hoja_global | 1 | 0.033 | 0.033 | 0.208 |
-| framework | 6 | 0.022 | 0.012 | 0.038 |
-| hoja_mandatory | 6 | 0.029 | 0.029 | 0.056 |
-| hoja_global | 6 | 0.054 | 0.054 | 0.209 |
-
-| mes | h | renovadas_reales | framework_pred | framework_error_total | hoja_mandatory_pred | hoja_mandatory_error_total | hoja_global_pred | hoja_global_error_total |
-|---|---|---|---|---|---|---|---|---|
-| 2026-06 | 1 | 1,146.000 | 1,145.673 | -0.000 | 1,136.297 | -0.008 | 1,154.864 | 0.008 |
-| 2026-06 | 6 | 1,146.000 | 1,127.191 | -0.016 | 1,147.182 | 0.001 | 1,178.076 | 0.028 |
-| 2026-07 | 1 | 1,059.000 | 1,109.314 | 0.048 | 1,111.972 | 0.050 | 1,122.374 | 0.060 |
-| 2026-07 | 6 | 1,059.000 | 1,091.968 | 0.031 | 1,121.604 | 0.059 | 1,143.632 | 0.080 |
-| 2026-08 | 1 | 1,109.000 | 1,126.161 | 0.015 | 1,126.293 | 0.016 | 1,143.761 | 0.031 |
-| 2026-08 | 6 | 1,109.000 | 1,131.004 | 0.020 | 1,140.085 | 0.028 | 1,169.878 | 0.055 |
-
-**Cuánto acertamos, forecast serie a forecast serie** (la técnica elegida de cada serie, en cada mes de examen y horizonte, aplicada a su propia pipeline; cada predicción con su intervalo, construido como la banda del forecast; en_intervalo: proporción de predicciones cuyo valor real cayó dentro). Cruzado por el tipo de serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad, solo donde son medibles:
-
-| segmento | series | predicciones | en_intervalo | wape | sesgo |
+| metodo | h | error_total_medio | sesgo_total_medio | wape_series | en_intervalo |
 |---|---|---|---|---|---|
-| todas las series examinadas | 12 | 70 | 86% | 3.9% | +1.6% |
-| volatilidad baja (φ ≤ 1,5) | 7 | 40 | 88% | 23.9% | +5.9% |
-| volatilidad alta (φ > 1,5) | 5 | 30 | 83% | 3.1% | +1.4% |
-| con tendencia (medible) | 1 | 6 | 83% | 6.2% | +1.8% |
-| sin tendencia (medible) | 4 | 22 | 91% | 2.4% | +1.3% |
-| estacional (medible) | 1 | 6 | 100% | 1.5% | +0.5% |
-| no estacional (medible) | 4 | 22 | 86% | 4.5% | +2.1% |
-| dinámica no medible (poco soporte o historia) | 7 | 42 | 83% | 26.1% | +7.3% |
+| framework | 1 | 0.021 | 0.021 | 0.042 | 0.854 |
+| raw | 1 | 0.022 | 0.022 | 0.044 | 0.805 |
+| hoja_mandatory | 1 | 0.025 | 0.019 | 0.051 |  |
+| hoja_global | 1 | 0.033 | 0.033 | 0.208 |  |
+| raw | 6 | 0.022 | 0.011 | 0.040 | 0.878 |
+| framework | 6 | 0.022 | 0.011 | 0.038 | 0.927 |
+| hoja_mandatory | 6 | 0.029 | 0.029 | 0.056 |  |
+| hoja_global | 6 | 0.054 | 0.054 | 0.209 |  |
+
+| mes | h | renovadas_reales | raw_pred | raw_error_total | framework_pred | framework_error_total | hoja_global_pred | hoja_global_error_total | hoja_mandatory_pred | hoja_mandatory_error_total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-06 | 1 | 1,146.000 | 1,148.987 | 0.003 | 1,145.388 | -0.001 | 1,154.864 | 0.008 | 1,136.297 | -0.008 |
+| 2026-06 | 6 | 1,146.000 | 1,127.202 | -0.016 | 1,126.904 | -0.017 | 1,178.076 | 0.028 | 1,147.182 | 0.001 |
+| 2026-07 | 1 | 1,059.000 | 1,109.894 | 0.048 | 1,108.907 | 0.047 | 1,122.374 | 0.060 | 1,111.972 | 0.050 |
+| 2026-07 | 6 | 1,059.000 | 1,090.387 | 0.030 | 1,091.413 | 0.031 | 1,143.632 | 0.080 | 1,121.604 | 0.059 |
+| 2026-08 | 1 | 1,109.000 | 1,126.655 | 0.016 | 1,125.893 | 0.015 | 1,143.761 | 0.031 | 1,126.293 | 0.016 |
+| 2026-08 | 6 | 1,109.000 | 1,130.804 | 0.020 | 1,130.650 | 0.020 | 1,169.878 | 0.055 | 1,140.085 | 0.028 |
+
+**Cuánto acertamos, forecast serie a forecast serie, y cuánto mejora frente a la serie sola** (paso 19: en cada mes de examen y horizonte, el framework —su composición con credibilidad— y la serie sola con su propia historia (raw), sobre las mismas filas y su propia pipeline; cada predicción con su intervalo, construido como la banda del forecast). Cruzado por el tipo de serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad:
+
+| segmento | series | predicciones | en_intervalo | en_intervalo_raw | wape | wape_raw | sesgo |
+|---|---|---|---|---|---|---|---|
+| todas las series examinadas | 14 | 82 | 89% | 84% | 4.0% | 4.2% | +1.5% |
+| volatilidad baja (φ ≤ 1,5) | 9 | 52 | 88% | 81% | 23.1% | 25.9% | +6.0% |
+| volatilidad alta (φ > 1,5) | 5 | 30 | 90% | 90% | 3.0% | 3.1% | +1.3% |
+| con tendencia (medible) | 1 | 6 | 83% | 83% | 6.2% | 6.2% | +1.8% |
+| sin tendencia (medible) | 4 | 22 | 91% | 91% | 2.4% | 2.5% | +1.3% |
+| estacional (medible) | 1 | 6 | 100% | 100% | 1.5% | 1.5% | +0.5% |
+| no estacional (medible) | 4 | 22 | 86% | 86% | 4.5% | 4.6% | +2.1% |
+| sin dinámica medible / sin composición | 9 | 54 | 89% | 81% | 23.3% | 26.9% | +4.3% |
 
 
 ## 6 · La revalorización: a qué precio se renueva
@@ -289,14 +291,14 @@ Cada fila futura: **USD que vence × tasa de su serie × uplift de su celda**. L
 
 | period | usd_vence | esperado_usd | banda_lineal_baja | banda_lineal_alta | banda_cuadratura_baja | banda_cuadratura_alta | esperado_real | esperado_proyectada | esperado_simulada | tasa_usd |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 2026-09 | 46,620 | 33,084 | 29,514 | 36,302 | 31,727 | 34,212 | 33,084 | 0 | 0 | 1 |
-| 2026-10 | 47,520 | 33,699 | 30,458 | 37,973 | 32,580 | 35,180 | 33,699 | 0 | 0 | 1 |
-| 2026-11 | 46,320 | 32,721 | 29,669 | 36,736 | 31,616 | 34,183 | 32,721 | 0 | 0 | 1 |
-| 2026-12 | 47,520 | 33,881 | 30,644 | 38,147 | 32,763 | 35,360 | 33,881 | 0 | 0 | 1 |
-| 2027-09 | 33,084 | 23,872 | 21,038 | 27,509 | 22,882 | 25,166 | 0 | 23,872 | 0 | 1 |
-| 2027-10 | 33,699 | 24,332 | 21,320 | 28,166 | 23,328 | 25,641 | 0 | 24,332 | 0 | 1 |
-| 2027-11 | 32,721 | 23,427 | 20,548 | 27,079 | 22,430 | 24,726 | 0 | 23,427 | 0 | 1 |
-| 2027-12 | 33,881 | 24,627 | 21,614 | 28,462 | 23,624 | 25,934 | 0 | 24,627 | 0 | 1 |
+| 2026-09 | 46,620 | 33,057 | 29,067 | 36,271 | 31,545 | 34,223 | 33,057 | 0 | 0 | 1 |
+| 2026-10 | 47,520 | 33,671 | 29,691 | 38,335 | 32,297 | 35,297 | 33,671 | 0 | 0 | 1 |
+| 2026-11 | 46,320 | 32,684 | 28,921 | 37,077 | 31,326 | 34,294 | 32,684 | 0 | 0 | 1 |
+| 2026-12 | 47,520 | 33,856 | 29,881 | 38,504 | 32,483 | 35,476 | 33,856 | 0 | 0 | 1 |
+| 2027-09 | 33,057 | 23,834 | 20,419 | 27,918 | 22,622 | 25,336 | 0 | 23,834 | 0 | 1 |
+| 2027-10 | 33,671 | 24,294 | 20,610 | 28,573 | 23,055 | 25,808 | 0 | 24,294 | 0 | 1 |
+| 2027-11 | 32,684 | 23,376 | 19,847 | 27,462 | 22,145 | 24,884 | 0 | 23,376 | 0 | 1 |
+| 2027-12 | 33,856 | 24,595 | 20,912 | 28,870 | 23,357 | 26,105 | 0 | 24,595 | 0 | 1 |
 
 **Por año** (lo renovado en los meses cerrados + lo esperado en los futuros):
 
@@ -305,27 +307,27 @@ Cada fila futura: **USD que vence × tasa de su serie × uplift de su celda**. L
 | 2,023 | 464,903 | 0 | 0 | 0 | 0 | 464,903 | 0 | 464,903 | 464,903 |
 | 2,024 | 446,200 | 0 | 0 | 0 | 0 | 446,200 | 0 | 446,200 | 446,200 |
 | 2,025 | 431,466 | 0 | 0 | 0 | 0 | 431,466 | 0 | 431,466 | 431,466 |
-| 2,026 | 276,974 | 133,385 | 0 | 0 | 133,385 | 410,359 | 2,791 | 397,260 | 426,133 |
-| 2,027 | 0 | 0 | 96,258 | 0 | 96,258 | 96,258 | 2,604 | 84,520 | 111,216 |
+| 2,026 | 276,974 | 133,267 | 0 | 0 | 133,267 | 410,241 | 3,037 | 394,534 | 427,160 |
+| 2,027 | 0 | 0 | 96,099 | 0 | 96,099 | 96,099 | 3,017 | 81,788 | 112,824 |
 
 **De dónde sale la tasa de las filas futuras:**
 
 | origen_tasa | filas | usd_vence | esperado_usd |
 |---|---|---|---|
 | celda_mandatory | 6 | 4,782 | 3,686 |
-| pool | 126 | 316,583 | 225,957 |
+| pool | 126 | 316,466 | 225,679 |
 
 **El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `fin_ano` y `fin_origen`, comprobado en el núcleo: en Power BI, SUM(fin_renovado_usd) y SUM(fin_vence_usd)). Orígenes: renovaciones ya contabilizadas y esperadas de la pipeline real, reentradas y captación del horizonte extendido, y el universo time_series de retail a suscripción (ts_real y ts_proyectado cuentan como revenue del año, sin tasa; ts_reentrada es pipeline del año siguiente: comprado con descuento, renueva al 100 % con la tasa de su región). Total 2026 = renovaciones de la pipeline + ts_real + ts_proyectado · Total 2027 = forecast extendido + ts_reentrada. usd_vence: pipeline; usd_renovado: renovaciones o revenue:
 
 | ano | origen | unidades_vencen | usd_vence | unidades_renovadas | usd_renovado |
 |---|---|---|---|---|---|
-| 2,026 | TOTAL | 19,907 | 558,330 | 13,912 | 422,599 |
-| 2,026 | pipeline_real_esperado | 6,698 | 187,980 | 4,412 | 133,385 |
+| 2,026 | TOTAL | 19,907 | 558,330 | 13,908 | 422,481 |
+| 2,026 | pipeline_real_esperado | 6,698 | 187,980 | 4,408 | 133,267 |
 | 2,026 | pipeline_renovado_real | 13,209 | 370,350 | 9,106 | 276,974 |
 | 2,026 | ts_proyectado | 0 | 0 | 137 | 4,254 |
 | 2,026 | ts_real | 0 | 0 | 256 | 7,986 |
-| 2,027 | TOTAL | 4,550 | 137,639 | 3,129 | 101,477 |
-| 2,027 | pipeline_proyectada | 4,412 | 133,385 | 3,027 | 96,258 |
+| 2,027 | TOTAL | 4,546 | 137,521 | 3,123 | 101,317 |
+| 2,027 | pipeline_proyectada | 4,408 | 133,267 | 3,022 | 96,099 |
 | 2,027 | ts_reentrada | 137 | 4,254 | 101 | 5,218 |
 
 **El universo time_series, región × mes:**
@@ -357,8 +359,8 @@ Cada fila futura: **USD que vence × tasa de su serie × uplift de su celda**. L
 | ok | the future USD due of the extract = Σ USD due of the forecast's extract rows | $187,980 (the extended horizon adds its own pipeline) |
 | ok | every series with money to predict has a rate and a risk level | 15 series |
 | ok | every future row of a series with an estimation id takes its rate from the pool | 126 of 132 rows from a pool |
-| ok | the expected rate of the future is within ±15 pp of 2026's | future 71.0% (USD, uplift included) vs 2026 74.8% |
-| ok | the error of the total renewals in the exam is within ±10% | worst month 4.8% |
+| ok | the expected rate of the future is within ±15 pp of 2026's | future 70.9% (USD, uplift included) vs 2026 74.8% |
+| ok | the error of the total renewals in the exam is within ±10% | worst month 4.7% |
 
 
 ## 8 · La ficha de cada serie y lo que falta

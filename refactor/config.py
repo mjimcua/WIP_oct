@@ -138,6 +138,46 @@ def is_one_year(rows: pd.DataFrame, configuration) -> pd.Series:
     return pd.Series(True, index=rows.index)
 
 
+ROLE_PURPOSES = [
+    (COLUMN_ROLE_PERIOD, "the month of the row"),
+    (COLUMN_ROLE_TIME_SERIES_FLAG, "1 = the time_series universe (retail to subscription), projected apart (step 20)"),
+    (COLUMN_ROLE_MEASURE, "summed: units and USD due, renewed, reacquired"),
+    (COLUMN_ROLE_MANDATORY, "open the forecast series and the uplift cell; collapsed in stage 3 of the ladder"),
+    (COLUMN_ROLE_TIMEVARYING, "signals of the customer, summarised by their sign in stage 1"),
+    (COLUMN_ROLE_EXTRA_RENOVACION, "open the forecast series; annulled in stage 2"),
+    (COLUMN_ROLE_EXTRA_REVALORIZACION, "open the uplift cell (the price), not the rate"),
+    (COLUMN_ROLE_BOTH_EXTRAS, "both extras"),
+    (COLUMN_ROLE_FORMULA_INPUT, "inputs of a formula (exact discount, SKU), not a dimension"),
+    (COLUMN_ROLE_IGNORE, "read and not used")]
+LEVELED_ROLE = "niveles generados (02b)"
+
+
+def roles_overview(columns, configuration) -> pd.DataFrame:
+    """Every role of the Config, in a fixed order, with its columns (0 when the role is empty), what it is for,
+    and the dimensions that get generated levels (level_1 grouped by the library, level_2 the raw value)."""
+    columns = list(columns)
+    present = set(columns)
+    roles = configuration.column_roles()                 # in the order the Config declares them
+    rows = []
+    for role, purpose in ROLE_PURPOSES:
+        role_columns = [column for column, column_role in roles.items() if column_role == role and column in present]
+        if role == COLUMN_ROLE_BOTH_EXTRAS and not role_columns:
+            continue
+        rows.append({"rol": role, "columnas": len(role_columns), "nombres": ", ".join(role_columns), "para_que": purpose})
+    leveled = []
+    for name, spec in (configuration.leveled_dims or {}).items():
+        source = (spec or {}).get("source", name)
+        level_type = (spec or {}).get("type", "nominal")
+        made = [column for column in (f"{name}_level_1", f"{name}_level_2") if column in columns]
+        leveled.append(f"{source} → {name}_level_1 (agrupado) + {name}_level_2 (raw) · {level_type}"
+                       + (" · ya generados" if len(made) == 2 else ""))
+    if leveled:
+        rows.append({"rol": LEVELED_ROLE, "columnas": len(leveled), "nombres": "; ".join(leveled),
+                     "para_que": "level_1: values grouped by their standardised rate (JSON in levels_path); collapsed before level_1"
+                                 .replace("collapsed before level_1", "the ladder collapses level_2 first, then level_1")})
+    return pd.DataFrame(rows)
+
+
 def join_columns(frame: pd.DataFrame, columns: list) -> pd.Series:
     """The "|"-joined id of every row from several columns, in the given order (the order
     is part of the id); a null value is written "null". Built on arrays, not Series, so a
@@ -199,6 +239,8 @@ class Config:
     levels_path: Optional[str] = None                 # the JSON of the generated groups (None: <output_folder>/sff_levels.json);
                                                       # a later run reuses it; delete it to regenerate
     level_merge_max_pp: float = 5.0                   # two neighbouring values merge while their rates differ by at most this
+    save_checkpoints: bool = True                     # every step saves its tables, so a later run can start from any step
+    checkpoint_folder: Optional[str] = None           # where (None: <output_folder>/checkpoints); one .pkl per table + manifest
     structural_timevarying_dims: dict = field(default_factory=dict)   # column → "negative" | "positive"
     extra_renovacion: list = field(default_factory=list)              # enter the rate series only
     extra_revalorizacion: list = field(default_factory=list)          # enter the uplift cell only

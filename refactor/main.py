@@ -121,13 +121,16 @@ def synthetic_configuration() -> Config:
 # THE RUN
 # ═══════════════════════════════════════════════════════════════════════════════════
 
-def run(configuration: Config) -> dict:
-    """Every step, in the order of their dependencies (pipeline.py: contracts, step interface, orchestrator)."""
-    return Orchestrator(configuration).run()
+def run(configuration: Config, from_step: str = None) -> dict:
+    """Every step, in the order of their dependencies (pipeline.py: contracts, step interface, orchestrator).
+    With from_step, the steps before it are loaded from the last checkpoint and it and the rest run."""
+    orchestrator = Orchestrator(configuration)
+    return orchestrator.run_from(from_step) if from_step else orchestrator.run()
 
 
 if __name__ == "__main__":
-    if SYNTHETIC_KEYWORD in sys.argv[1:]:
-        run(synthetic_configuration())
-    else:
-        run(production_configuration())
+    # python main.py [sintetico] [--desde <step>]    e.g. python main.py --desde forecast
+    arguments = sys.argv[1:]
+    from_step = arguments[arguments.index("--desde") + 1] if "--desde" in arguments else None
+    configuration = synthetic_configuration() if SYNTHETIC_KEYWORD in arguments else production_configuration()
+    run(configuration, from_step=from_step)
