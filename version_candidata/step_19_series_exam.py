@@ -51,7 +51,8 @@ import numpy as np
 import pandas as pd
 
 from config import Config, join_columns
-from prediction import band_quantiles, levels_at_origins, predict_composition, rate_band, shifted_rate
+from prediction import (band_quantiles, index_history, levels_at_origins, months_known, predict_composition, rate_band,
+                        shifted_rate)
 from report_queries import exam_by_month_query, exam_summary_query
 from step_14_backtest import band_of_horizon
 from techniques import CATALOGUE, logit
@@ -116,6 +117,9 @@ def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, poo
                                     & (pool_series["vencen"] > 0)]
     reference_history = (closed.merge(reference_members, on=SERIES_ID_COLUMN)
                          if reference_members is not None and len(reference_members) else closed.iloc[0:0].assign(credibility_ref_id=None))
+    # the histories, indexed ONCE: every (month, horizon) below takes the prefix known at its origin
+    composition_index = composition_history_index(composition_truth, period)
+    series_index = series_history_index(closed, period, due, renewed)
     rows, latest_used = [], []
     for target_month in exam_months:
         for horizon in configuration.backtest_horizons:
@@ -125,8 +129,8 @@ def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, poo
             month_rows = real[real[period] == target_month].copy()
             month_rows["h"], month_rows["origin"] = horizon, origin
             month_rows["tramo_h"] = band_of_horizon(int(horizon), configuration.horizon_bands)
-            rows.append(predict_month(month_rows, known, composition_truth, reference_history, decision, origin, horizon,
-                                      backtest["bands"], configuration))
+            rows.append(predict_month(month_rows, known, composition_index, series_index, reference_history, decision,
+                                      origin, horizon, backtest["bands"], configuration))
     detail = pd.concat(rows, ignore_index=True)
     methods = sorted(detail["method"].unique(), key=lambda method: (method != METHOD_RAW, method != METHOD_FRAMEWORK, method))
     configuration.log_action(STEP_LABEL, 2, f"{len(detail):,} predictions · methods {methods}")
@@ -182,10 +186,30 @@ def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, poo
     return dict(detail=detail, per_series=per_series, by_month=by_month, summary=summary)
 
 
-def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_truth: pd.DataFrame,
+def composition_history_index(composition_truth: pd.DataFrame, period: str) -> dict:
+    """The closed months of every composition (index_history), with the logit of its rate per month."""
+    composition_index = index_history(composition_truth, COMPOSITION_ID_COLUMN, period, [RATE_COLUMN, "renovadas", "vencen"])
+    for entry in composition_index.values():
+        entry["rate_logit"] = logit(entry[RATE_COLUMN])
+        entry["rate_logit"].flags.writeable = False
+    return composition_index
+
+
+def series_history_index(closed: pd.DataFrame, period: str, due: str, renewed: str) -> dict:
+    """The closed months of every forecast series (index_history), with units due and renewed and the
+    logit of its own rate per month (clipped as the raw method has always clipped it)."""
+    series_index = index_history(closed, SERIES_ID_COLUMN, period, [renewed, due])
+    for entry in series_index.values():
+        entry["renewed"], entry["due"] = entry[renewed], entry[due]
+        entry["rate_logit"] = logit(np.clip(entry["renewed"] / entry["due"], 1e-6, 1 - 1e-6))
+        entry["rate_logit"].flags.writeable = False
+    return series_index
+
+def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_index: dict, series_index: dict,
                   reference_history: pd.DataFrame, decision: pd.Series, origin, horizon: int, bands: pd.DataFrame,
                   configuration: Config) -> pd.DataFrame:
-    """The predictions of one exam month and horizon, one row per series and method."""
+    """The predictions of one exam month and horizon, one row per series and method. The histories come
+    indexed (composition_history_index, series_history_index): each key uses the months up to the origin."""
     period, due, renewed = configuration.period_col, configuration.pipeline_units_col, configuration.renewed_units_col
     band_name = band_of_horizon(int(horizon), configuration.horizon_bands)
     cell_level = known.groupby("_cell")[renewed].sum() / known.groupby("_cell")[due].sum()
@@ -193,19 +217,18 @@ def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_tru
     month_rows = month_rows.assign(cell_level=month_rows["_cell"].map(cell_level).fillna(global_level))
 
     # the framework: the composition's prediction, moved toward its reference (levels known at the origin)
-    composition_known = composition_truth[composition_truth[period] <= origin]
     composition_rate, composition_level, composition_technique = {}, {}, {}
-    for composition_id, monthly in composition_known[composition_known[COMPOSITION_ID_COLUMN].isin(
-            set(month_rows[COMPOSITION_ID_COLUMN].dropna()))].groupby(COMPOSITION_ID_COLUMN):
-        if len(monthly) < MIN_MONTHS_TO_PREDICT:
+    for composition_id in sorted(set(month_rows[COMPOSITION_ID_COLUMN].dropna())):
+        entry = composition_index.get(composition_id)
+        months_at_origin = months_known(entry, origin) if entry is not None else 0
+        if months_at_origin < MIN_MONTHS_TO_PREDICT:
             continue
-        monthly = monthly.sort_values(period)
         technique = decision.get((composition_id, band_name), configuration.challenger_technique)
-        technique, rate = predict_composition(logit(monthly[RATE_COLUMN].to_numpy(dtype=float)),
-                                              np.array([month.month for month in monthly[period]]), technique, horizon,
-                                              configuration.challenger_technique)
+        technique, rate = predict_composition(entry["rate_logit"][:months_at_origin], entry["month"][:months_at_origin],
+                                              technique, horizon, configuration.challenger_technique)
         composition_rate[composition_id], composition_technique[composition_id] = rate, technique
-        composition_level[composition_id] = monthly["renovadas"].sum() / monthly["vencen"].sum()
+        composition_level[composition_id] = (entry["renovadas"][:months_at_origin].sum()
+                                             / entry["vencen"][:months_at_origin].sum())
     reference_level = levels_at_origins(reference_history, "credibility_ref_id",
                                         pd.DataFrame({"credibility_ref_id": month_rows["credibility_ref_id"].dropna().unique(),
                                                       "origin": origin}), period, due, renewed).set_index("credibility_ref_id")["level"]
@@ -221,20 +244,22 @@ def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_tru
     framework["technique"] = framework["technique"].fillna("mandatory_cell")
 
     # raw: the forecast series alone, with its own months
-    own_known = known[known[SERIES_ID_COLUMN].isin(set(month_rows[SERIES_ID_COLUMN]))]
     own_rate, own_technique = {}, {}
     composition_of = month_rows.drop_duplicates(SERIES_ID_COLUMN).set_index(SERIES_ID_COLUMN)[COMPOSITION_ID_COLUMN].to_dict()
-    for series_id, monthly in own_known.groupby(SERIES_ID_COLUMN):
-        monthly = monthly.sort_values(period)
+    for series_id in sorted(set(month_rows[SERIES_ID_COLUMN])):
+        entry = series_index.get(series_id)
+        months_at_origin = months_known(entry, origin) if entry is not None else 0
+        if months_at_origin == 0:
+            continue                                  # no own month yet: the cell level, below (fillna)
         composition_id = composition_of.get(series_id)
-        if len(monthly) < MIN_MONTHS_TO_PREDICT:
-            own_rate[series_id], own_technique[series_id] = monthly[renewed].sum() / monthly[due].sum(), "own_level"
+        if months_at_origin < MIN_MONTHS_TO_PREDICT:
+            own_rate[series_id] = entry["renewed"][:months_at_origin].sum() / entry["due"][:months_at_origin].sum()
+            own_technique[series_id] = "own_level"
             continue
         technique = decision.get((composition_id, band_name), configuration.challenger_technique)
-        if len(monthly) < int(CATALOGUE.get(technique, (None, None, None, 1))[3]):
+        if months_at_origin < int(CATALOGUE.get(technique, (None, None, None, 1))[3]):
             technique = configuration.challenger_technique
-        monthly_rates = (monthly[renewed] / monthly[due]).clip(1e-6, 1 - 1e-6).to_numpy(dtype=float)
-        technique, rate = predict_composition(logit(monthly_rates), np.array([month.month for month in monthly[period]]),
+        technique, rate = predict_composition(entry["rate_logit"][:months_at_origin], entry["month"][:months_at_origin],
                                               technique, horizon, configuration.challenger_technique)
         own_rate[series_id], own_technique[series_id] = rate, technique
     raw = month_rows.copy()

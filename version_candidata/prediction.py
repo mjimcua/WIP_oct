@@ -76,12 +76,16 @@ def band_quantiles(bands: pd.DataFrame, techniques, horizons, configuration) -> 
     """(q_low, q_high) of every (technique, horizon): the technique's quantiles at its judged horizon
     (itself, the next one above, or the last); the challenger's if the technique has none; ±z if neither has."""
     table = bands.set_index(["tecnica", "h"])
+    # plain dicts, built once: a lookup per row in a dict costs ~0.1 µs; on the MultiIndex of a Series it
+    # costs tens of µs, and close to a millisecond when the key is missing (it goes through an exception)
+    low_of_key = table["q_low_norm"].to_dict()
+    high_of_key = table["q_high_norm"].to_dict()
     judged = list(configuration.backtest_horizons)
     keys = [(technique, judged_horizon(int(horizon), judged)) for technique, horizon in zip(techniques, horizons)]
     fallbacks = [(configuration.challenger_technique, judged_h) for _, judged_h in keys]
-    q_low = np.array([table["q_low_norm"].get(key, table["q_low_norm"].get(fallback, -configuration.z))
+    q_low = np.array([low_of_key.get(key, low_of_key.get(fallback, -configuration.z))
                       for key, fallback in zip(keys, fallbacks)], dtype=float)
-    q_high = np.array([table["q_high_norm"].get(key, table["q_high_norm"].get(fallback, configuration.z))
+    q_high = np.array([high_of_key.get(key, high_of_key.get(fallback, configuration.z))
                        for key, fallback in zip(keys, fallbacks)], dtype=float)
     return q_low, q_high
 
@@ -94,6 +98,41 @@ def rate_band(rate, units_due, q_low, q_high) -> tuple:
     low = np.clip(rate + np.minimum(q_low, 0) * binomial_error, 0, 1)
     high = np.clip(rate + np.maximum(q_high, 0) * binomial_error, 0, 1)
     return low, high
+
+
+def index_history(frame: pd.DataFrame, key_column: str, period_column: str, value_columns: list) -> dict:
+    """The monthly history of every key as plain numpy arrays, sorted by period, built ONCE.
+
+    One entry per key (in sorted order, like groupby; keys that are null are left out, like groupby):
+    'ordinal' (the period as an integer, for searchsorted), 'month' (1..12) and one float array per value
+    column. The hot loops slice these arrays instead of filtering, grouping and sorting a DataFrame per key
+    per origin: the data and its order are exactly what groupby(key) + sort_values(period) gave.
+    The arrays are read-only: a technique that wrote into its history would change the next origin's.
+    """
+    index = {}
+    narrow = frame.loc[frame[key_column].notna(), [key_column, period_column] + list(value_columns)]
+    if not len(narrow):
+        return index
+    narrow = narrow.sort_values([key_column, period_column])
+    ordinals = np.array([period.ordinal for period in narrow[period_column]], dtype=np.int64)
+    months = np.array([period.month for period in narrow[period_column]], dtype=np.int64)
+    values = {column: narrow[column].to_numpy(dtype=float) for column in value_columns}
+    keys = narrow[key_column].to_numpy()
+    starts = np.flatnonzero(np.concatenate(([True], keys[1:] != keys[:-1])))
+    bounds = np.append(starts, len(keys))
+    for start, end in zip(bounds[:-1], bounds[1:]):
+        entry = {"ordinal": ordinals[start:end], "month": months[start:end]}
+        for column in value_columns:
+            entry[column] = values[column][start:end]
+        index[keys[start]] = entry
+    for array in [ordinals, months] + list(values.values()):
+        array.flags.writeable = False
+    return index
+
+
+def months_known(entry: dict, origin) -> int:
+    """How many months of this key's history are at or before the origin (period <= origin)."""
+    return int(np.searchsorted(entry["ordinal"], origin.ordinal, side="right"))
 
 
 def levels_at_origins(history: pd.DataFrame, key: str, wanted: pd.DataFrame, period_column: str,

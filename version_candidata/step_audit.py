@@ -62,7 +62,7 @@ from config import Config
 from step_11_ladder import credibility_k_detail
 from step_13_dynamics import dynamics_of_one_series
 from step_14_backtest import band_of_horizon
-from prediction import band_quantiles, levels_at_origins, rate_band, shifted_rate
+from prediction import band_quantiles, index_history, levels_at_origins, rate_band, shifted_rate
 from techniques import CATALOGUE, inverse_logit, logit, predict_logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PURPOSE_EXAM, PURPOSE_SELECTION,
                          RATE_COLUMN, RATE_FROM_POOL, SERIES_ID_COLUMN, SYNTHETIC_COLUMN, TABLE_COMPOSITION,
@@ -370,8 +370,9 @@ def series_dynamics_table(groups: pd.DataFrame, series_rate: pd.DataFrame, histo
     monthly = history.rename(columns={configuration.pipeline_units_col: "vencen", configuration.renewed_units_col: "renovadas"})
     composition_dynamics = (pool_dynamics.set_index(COMPOSITION_ID_COLUMN)[["tendencia", "estacional"]]
                             if pool_dynamics is not None and len(pool_dynamics) else pd.DataFrame(columns=["tendencia", "estacional"]))
-    months_of_series = {series_id: block.sort_values(configuration.period_col)
-                        for series_id, block in monthly.groupby(SERIES_ID_COLUMN)}   # one pass over the history
+    # one sort of the whole history, then the blocks arrive already in order (no sort per series)
+    monthly = monthly.sort_values([SERIES_ID_COLUMN, configuration.period_col])
+    months_of_series = dict(iter(monthly.groupby(SERIES_ID_COLUMN, sort=False)))
     no_months = monthly.iloc[0:0]
     rows = []
     for series_id, composition_id in zip(groups[SERIES_ID_COLUMN], groups[COMPOSITION_ID_COLUMN]):
@@ -456,9 +457,10 @@ def series_backtest_table(predictions: pd.DataFrame, decision: pd.DataFrame, ban
     rows["band_high_units"] = rows["band_high_rate"] * rows["due_units"]
     rows["in_band"] = ((rows["real_rate"] >= rows["band_low_rate"] - 1e-12)
                        & (rows["real_rate"] <= rows["band_high_rate"] + 1e-12)).astype(int)
-    chosen = decision.set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"]
-    rows["is_chosen"] = (pd.Series(list(zip(rows[COMPOSITION_ID_COLUMN], rows["tramo_h"])), index=rows.index).map(chosen)
-                         == rows["tecnica"]).astype(int)
+    # a plain dict and one lookup per row: building a Series of ~1M tuples to .map them costs far more
+    chosen = decision.set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"].to_dict()
+    chosen_of_row = [chosen.get(pair) for pair in zip(rows[COMPOSITION_ID_COLUMN], rows["tramo_h"])]
+    rows["is_chosen"] = (pd.Series(chosen_of_row, index=rows.index) == rows["tecnica"]).astype(int)
     rows["shifted_by_credibility"] = (np.abs(shift) > 0).astype(int)
     rows["credibility_shift_logit"] = shift
     return rows[[SERIES_ID_COLUMN, COMPOSITION_ID_COLUMN, "mes_objetivo", "h", "tramo_h", "origin", "tecnica", "is_chosen",
@@ -478,8 +480,9 @@ def series_technique_summary(series_backtest: pd.DataFrame) -> pd.DataFrame:
                             COMPOSITION_ID_COLUMN: grouped[COMPOSITION_ID_COLUMN].first()}).reset_index()
     summary["rank"] = summary.groupby([SERIES_ID_COLUMN, "tramo_h"])["mean_abs_err_norm"].rank(method="min")
     summary["best_for_series"] = (summary["rank"] == 1).astype(int)
-    chosen_rank = summary[summary["is_chosen"] == 1].set_index([SERIES_ID_COLUMN, "tramo_h"])["rank"]
-    summary["chosen_rank"] = pd.Series(list(zip(summary[SERIES_ID_COLUMN], summary["tramo_h"])), index=summary.index).map(chosen_rank)
+    chosen_rank = summary[summary["is_chosen"] == 1].set_index([SERIES_ID_COLUMN, "tramo_h"])["rank"].to_dict()
+    summary["chosen_rank"] = pd.Series([chosen_rank.get(pair, np.nan) for pair in zip(summary[SERIES_ID_COLUMN], summary["tramo_h"])],
+                                       index=summary.index, dtype=float)
     return summary
 
 
@@ -545,17 +548,18 @@ def composition_forecast_all(pool_series: pd.DataFrame, decision: pd.DataFrame, 
     horizons = sorted(int(horizon) for horizon in forecast_rows["h"].dropna().unique()) if forecast_rows is not None else []
     chosen = decision.set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"]
     rows = []
-    for composition_id, monthly in truth.groupby(COMPOSITION_ID_COLUMN):
-        monthly = monthly.sort_values(configuration.period_col)
-        history_logit = logit(monthly[RATE_COLUMN].to_numpy(dtype=float))
-        months = np.array([month.month for month in monthly[configuration.period_col]])
+    history_of_composition = index_history(truth, COMPOSITION_ID_COLUMN, configuration.period_col, [RATE_COLUMN])
+    for composition_id, entry in history_of_composition.items():          # in the order of groupby (sorted ids)
+        history_logit = logit(entry[RATE_COLUMN])
+        months = entry["month"]
+        months_available = len(months)
         for horizon in horizons:
             band_name = band_of_horizon(horizon, configuration.horizon_bands)
             for technique_id, technique in CATALOGUE.items():
-                enough = len(monthly) >= int(technique[3])
+                enough = months_available >= int(technique[3])
                 value = predict_logit(technique_id, history_logit, months, horizon) if enough else np.nan
                 rows.append({COMPOSITION_ID_COLUMN: composition_id, "h": horizon, "tramo_h": band_name,
-                             "tecnica": technique_id, "months_available": len(monthly),
+                             "tecnica": technique_id, "months_available": months_available,
                              "rate": float(inverse_logit(value)) if np.isfinite(value) else np.nan,
                              "is_chosen": int(chosen.get((composition_id, band_name)) == technique_id)})
     return pd.DataFrame(rows)
@@ -567,8 +571,9 @@ def check_forecast_all(forecast_all: pd.DataFrame, forecast_rows: pd.DataFrame, 
     z_of = series_estimate.drop_duplicates(COMPOSITION_ID_COLUMN).set_index(COMPOSITION_ID_COLUMN)["z"]
     rows = forecast_rows[(forecast_rows["origen_tasa"] == RATE_FROM_POOL)]
     rows = rows[rows[COMPOSITION_ID_COLUMN].map(z_of).fillna(1) >= 1]
-    chosen = forecast_all[forecast_all["is_chosen"] == 1].set_index([COMPOSITION_ID_COLUMN, "h"])["rate"]
-    expected = pd.Series(list(zip(rows[COMPOSITION_ID_COLUMN], rows["h"].astype(int))), index=rows.index).map(chosen)
+    chosen = forecast_all[forecast_all["is_chosen"] == 1].set_index([COMPOSITION_ID_COLUMN, "h"])["rate"].to_dict()
+    expected = pd.Series([chosen.get(pair, np.nan) for pair in zip(rows[COMPOSITION_ID_COLUMN], rows["h"].astype(int))],
+                         index=rows.index, dtype=float)
     differs = (expected - rows[RATE_COLUMN]).abs() > RATE_TOLERANCE
     configuration.log_check(STEP_LABEL, check_log, "the chosen technique gives the rate step 17 used (rows with no credibility shift)",
                             not bool(differs.any()), failure_detail=f"{int(differs.sum())} future rows differ",

@@ -78,7 +78,7 @@ import pandas as pd
 
 from config import ACTIVE_FLAG_VALUES, Config, discount_bucket_labels, is_one_year, join_columns, parse_month
 from step_14_backtest import band_of_horizon
-from prediction import band_quantiles, predict_composition, rate_band, shifted_rate
+from prediction import band_quantiles, index_history, predict_composition, rate_band, shifted_rate
 from techniques import inverse_logit, logit, predict_logit
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, GATE_LEVEL, PATH_CONTRACT, PATH_STATISTICAL,
                          PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL, PIPELINE_SIMULATED, RATE_COLUMN,
@@ -207,9 +207,10 @@ def confidence_of_rows(rows: pd.DataFrame, context: dict, configuration: Config)
     band_half_width_pp = 100 * (rows["tasa_alta"] - rows["tasa_baja"]) / 2
     judged_ids = set(context["pool_reference"].loc[context["pool_reference"]["gate"] == GATE_LEVEL, COMPOSITION_ID_COLUMN])
     judged = rows[COMPOSITION_ID_COLUMN].isin(judged_ids) & (rows["origen_tasa"] == RATE_FROM_POOL)
-    exam = context["backtest"]["exam_by_pool"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["elegida_err_pp_medio"]
+    exam_of_key = context["backtest"]["exam_by_pool"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["elegida_err_pp_medio"].to_dict()
     horizon_band = rows["h"].map(lambda horizon: band_of_horizon(int(horizon), configuration.horizon_bands))
-    exam_error = pd.Series(list(zip(rows[COMPOSITION_ID_COLUMN], horizon_band)), index=rows.index).map(exam)
+    exam_error = pd.Series([exam_of_key.get(pair, np.nan) for pair in zip(rows[COMPOSITION_ID_COLUMN], horizon_band)],
+                           index=rows.index, dtype=float)
     high = (judged & (band_half_width_pp <= configuration.confidence_high_band_pp)
             & (exam_error <= configuration.confidence_high_exam_pp))
     medium = judged & (band_half_width_pp <= configuration.confidence_medium_band_pp)
@@ -387,10 +388,10 @@ def pool_predictions(pool_series: pd.DataFrame, backtest: dict, horizons: list, 
     decision = backtest["decision"].set_index([COMPOSITION_ID_COLUMN, "tramo_h"])["tecnica"]
     truth = pool_series[pool_series[CALENDAR_ROLE_COLUMN].isin(TRUTH_ROLES) & pool_series[RATE_COLUMN].notna() & (pool_series["vencen"] > 0)]
     rows = []
-    for composition_id, monthly in truth.groupby(COMPOSITION_ID_COLUMN):
-        monthly = monthly.sort_values(configuration.period_col)
-        history = logit(monthly[RATE_COLUMN].to_numpy(dtype=float))
-        calendar_months = np.array([month.month for month in monthly[configuration.period_col]])
+    history_of_composition = index_history(truth, COMPOSITION_ID_COLUMN, configuration.period_col, [RATE_COLUMN])
+    for composition_id, entry in history_of_composition.items():          # in the order of groupby (sorted ids)
+        history = logit(entry[RATE_COLUMN])
+        calendar_months = entry["month"]
         for horizon in horizons:
             band_name = band_of_horizon(int(horizon), configuration.horizon_bands)
             technique = decision.get((composition_id, band_name), configuration.challenger_technique)

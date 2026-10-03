@@ -82,6 +82,10 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
   (antes `01b`) forman parte del paso 01; el antiguo `02b` y el examen de cartera duplicado (`step_19_portfolio_exam.py`) se
   retiraron.
 
+## Rendimiento (3-oct-2026)
+- Reglas de escritura a la escala del extracto real (~1 M filas) y protocolo de prueba de cualquier cambio de
+  rendimiento (tablas idénticas bit a bit con `table_equivalence.py`): `DOC_rendimiento.md`.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

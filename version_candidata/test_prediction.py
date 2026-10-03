@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 
 from main import run
-from prediction import credibility_shift, judged_horizon, levels_at_origins, rate_band, shifted_rate
+from prediction import (band_quantiles, credibility_shift, index_history, judged_horizon, levels_at_origins, months_known,
+                        rate_band, shifted_rate)
 from techniques import inverse_logit, logit
 from test_helpers import check, console_of, finish, synthetic_with
 
@@ -51,7 +52,35 @@ def test_one_way_of_predicting() -> None:
     check(np.allclose(recomputed, traced["tasa"]), "every forecast rate is its composition's prediction moved by prediction.py")
 
 
+def test_the_lookups_at_scale() -> None:
+    print("C · the lookups of the hot loops: the same values as the pandas way, on every path")
+    configuration = synthetic_with()
+    challenger = configuration.challenger_technique
+    bands = pd.DataFrame({"tecnica": ["T2_mean", "T2_mean", challenger], "h": [1, 6, 1],
+                          "q_low_norm": [-1.1, -2.2, -1.5], "q_high_norm": [1.3, 2.4, 1.6]})
+    q_low, q_high = band_quantiles(bands, ["T2_mean", "T9_ses", "T9_ses", "own_level"], [1, 1, 6, 6], configuration)
+    check(list(q_low) == [-1.1, -1.5, -configuration.z, -configuration.z] and list(q_high) == [1.3, 1.6, configuration.z, configuration.z],
+          "band quantiles: the technique's own band; without one, the challenger's; without either, ±z")
+
+    months = pd.period_range("2025-01", periods=6, freq="M")
+    frame = pd.DataFrame({"key": ["b", "a", "b", "a", None, "b"], "period": [months[3], months[1], months[0], months[0], months[2], months[5]],
+                          "due": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]})
+    index = index_history(frame, "key", "period", ["due"])
+    origin = months[3]
+    as_pandas = {key: block.sort_values("period")["due"].to_numpy() for key, block in frame[frame["period"] <= origin].groupby("key")}
+    as_index = {key: entry["due"][:months_known(entry, origin)] for key, entry in index.items()}
+    check(list(index) == ["a", "b"] and all(np.array_equal(as_pandas[key], as_index[key]) for key in as_pandas),
+          "the history index: sorted keys, null keys out, and every prefix is what groupby + sort + the origin filter gave")
+    try:
+        index["a"]["due"][0] = 0.0
+        written = True
+    except ValueError:
+        written = False
+    check(not written, "the indexed histories are read-only: a technique cannot change the next origin's history")
+
+
 if __name__ == "__main__":
     test_the_functions()
     test_one_way_of_predicting()
+    test_the_lookups_at_scale()
     finish()
