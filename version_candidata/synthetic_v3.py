@@ -118,6 +118,30 @@ def build_raw(seed: int = 7, with_discount_pct: bool = False) -> pd.DataFrame:
     # time_series universe
     series("EU", "A", "kiosk", 0, 0, 0, 0, 50, lambda i, m: .65, flat, time_series=1)
     raw = pd.DataFrame(collected_rows)
+    # the contracts that never had a softcancel (before, during or after the renewal). The mark softcancel of the
+    # raw is the one BEFORE the renewal: a row with softcancel = 0 still has contracts that went through one in the
+    # payment attempts or the grace period. Of what fell due, a share never had one; of the renewers, a smaller
+    # share (a softcancel lowers the chance to renew). Their own generator, so no other column changes
+    never_softcancel_rng = np.random.default_rng(seed + 1000)
+    share_due_never = never_softcancel_rng.uniform(0.95, 0.99, len(raw))
+    share_renewed_never = share_due_never * never_softcancel_rng.uniform(0.90, 1.00, len(raw))
+    marked = raw["softcancel"] == 1
+    raw["total_tr_units_without_softcancel"] = np.where(marked, 0.0, raw["total_tr_units"] * share_due_never)
+    raw["total_renewed_units_without_softcancel"] = np.where(marked, 0.0, raw["total_renewed_units"] * share_renewed_never)
+    raw["total_renewed_usd_without_softcancel"] = np.where(marked, 0.0, raw["total_renewed_usd"] * share_renewed_never)
+    # the exact base of the uplift: what the RENEWERS were worth before renewing, built per licence in the
+    # real extract. Here: the renewed units at the row's unit price times a small selection factor (renewers
+    # slightly dearer than the row's average), capped at what fell due. Its own generator: no other column changes
+    uplift_base_rng = np.random.default_rng(seed + 2000)
+    row_unit_price = raw["total_tr_usd"] / raw["total_tr_units"].where(raw["total_tr_units"] > 0)
+    selection_factor = uplift_base_rng.uniform(1.0, 1.06, len(raw))
+    raw["total_tr_usd_renewed"] = np.minimum(raw["total_tr_usd"],
+                                             raw["total_renewed_units"] * row_unit_price * selection_factor)
+    raw.loc[raw["total_renewed_units"] == 0, "total_tr_usd_renewed"] = 0.0
+    # and what the never-softcancel renewers were worth: the same share of the renewers' value as of their units
+    renewed_units_share = (raw["total_renewed_units_without_softcancel"]
+                           / raw["total_renewed_units"].where(raw["total_renewed_units"] > 0)).fillna(0.0)
+    raw["total_tr_usd_renewed_without_softcancel"] = raw["total_tr_usd_renewed"] * renewed_units_share
     if with_discount_pct:
         # the exact discount in tanto por 1 (0.4 for the d40 bucket, 0.0 for d0), UNKNOWN (null) in the kiosk channel
         raw["discount_pct"] = np.where(raw["channel"] == "kiosk", np.nan, np.where(raw["discount"] == "d40", 0.4, 0.0))

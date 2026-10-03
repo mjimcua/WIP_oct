@@ -6,8 +6,14 @@ The core (sff_nucleo) and the forecast series dimension (sff_forecast_series) ca
 Power BI still needs is the context to show them to business: a name for every code, an order, a block.
 That context is built here, once, in Python, instead of as calculated tables or DAX inside the report.
 
-Tables written (one per auxiliary dimension; this step will grow with the report):
+Tables written (one per auxiliary table; this step will grow with the report):
 
+  sff_price_increase_monitor     one row per closed pipeline month: the uplift of everyone, the uplift
+                                 of those who never had a softcancel (the detector: no retention
+                                 discounts in it), the step against the average of the previous 12
+                                 months, and the increase cycle (a price increase affects the renewals
+                                 of ONE cycle: who renews pays the new price, but a year later everyone
+                                 already bought at it, so the step lasts CYCLE_MONTHS and then fades)
   sff_forecast_pipeline_source   one row per value of forecast_pipeline_source (the origin of every
                                  row of the core): its business label, the block it belongs to and its
                                  order in the report. Relation in Power BI:
@@ -28,6 +34,7 @@ Checks (logged as they are made, numbered, at the level of their status):
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
+import numpy as np
 import pandas as pd
 
 from config import Config
@@ -41,13 +48,23 @@ STEP_NAME = "ADAPTATION TO POWER BI"
 STEP_PURPOSE = ("build the auxiliary tables of the Power BI report (names, orders and blocks of the codes of the core), "
                 "so that Power BI only relates and sums: no logic inside the report")
 STEP_ACTIONS = ["the table of pipeline sources: code, label, block, order",
-                "check it against the core (checks 1-2)",
-                "write it (check 3)",
+                "the price increase monitor: the uplift of the closed months and its steps",
+                "check the tables against the core (checks 1-4)",
+                "write them (checks 5-6)",
                 "count the checks; stop if any failed",
-                "show the table"]
-STEP_OUTPUT = "table sff_forecast_pipeline_source (one row per forecast_pipeline_source)"
+                "show the tables"]
+STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeline_source) and "
+               "sff_price_increase_monitor (one row per closed pipeline month)")
 
 PIPELINE_SOURCE_TABLE = "forecast_pipeline_source"
+PRICE_MONITOR_TABLE = "price_increase_monitor"
+
+# the detector of price increases, over the uplift of those who never had a softcancel:
+PRICE_STEP_THRESHOLD = 0.03    # a month this far above the average of its previous 12 is above the threshold
+PERSISTENCE_MONTHS = 3         # an increase is a step that STAYS: this many consecutive months above the threshold
+                               # (one noisy month is not an increase; the price of it: a step is confirmed 2 months late)
+CYCLE_MONTHS = 12              # the effect of an increase lasts one renewal cycle: 12 months of due dates
+MIN_REFERENCE_MONTHS = 6       # fewer previous months than this: no reference yet, no flag
 
 # the blocks of the report: where each source sits when the pipeline of a year is broken down
 BLOCK_EXTRACT_PIPELINE = "Extract pipeline"        # due dates already in the extract
@@ -88,8 +105,15 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
     configuration.log_action(STEP_LABEL, 1, f"{len(pipeline_source_table)} pipeline sources in "
                                             f"{pipeline_source_table['source_block'].nunique()} blocks")
 
-    # [2] the checks against the core
-    configuration.log_action(STEP_LABEL, 2, "checking the table against the core")
+    # [2] the price increase monitor
+    price_monitor = price_increase_monitor(core_table, configuration)
+    flagged_months = price_monitor[price_monitor["price_increase_flag"] == 1]["period"].tolist()
+    configuration.log_action(STEP_LABEL, 2, f"{len(price_monitor):,} closed pipeline months in the monitor · detector on "
+                                            f"{price_monitor.attrs['detector_series']} · increases flagged: "
+                                            f"{flagged_months if flagged_months else 'none'}")
+
+    # [3] the checks against the core
+    configuration.log_action(STEP_LABEL, 3, "checking the tables against the core")
     sources_in_core = set(core_table[FINAL_ORIGIN_COLUMN].dropna().unique())
     sources_in_table = set(pipeline_source_table[FINAL_ORIGIN_COLUMN])
     sources_without_row = sorted(sources_in_core - sources_in_table)
@@ -106,20 +130,128 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
                             not repeated_sources,
                             failure_detail=f"repeated sources: {repeated_sources}")
 
-    # [3] the write
-    configuration.log_action(STEP_LABEL, 3, "writing the table")
-    configuration.write_table(STEP_LABEL, check_log, pipeline_source_table, PIPELINE_SOURCE_TABLE)
+    with_renewals = price_monitor[price_monitor["renewed_units"] > 0]
+    configuration.log_check(STEP_LABEL, check_log,
+                            "every closed pipeline month with renewals has its uplift in the monitor",
+                            with_renewals["uplift"].notna().all(),
+                            failure_detail=f"{int(with_renewals['uplift'].isna().sum())} months with renewals and no uplift",
+                            context=f"{len(price_monitor):,} months")
+    flags_without_reference = price_monitor[(price_monitor["price_increase_flag"] == 1)
+                                            & price_monitor["uplift_previous_12"].isna()]
+    configuration.log_check(STEP_LABEL, check_log,
+                            f"an increase is only flagged against a reference of ≥ {MIN_REFERENCE_MONTHS} previous months",
+                            flags_without_reference.empty,
+                            failure_detail=f"{len(flags_without_reference)} months flagged without a reference")
 
-    # [4] the count
-    configuration.log_action(STEP_LABEL, 4, "counting the checks")
+    # [4] the writes
+    configuration.log_action(STEP_LABEL, 4, "writing the tables")
+    configuration.write_table(STEP_LABEL, check_log, pipeline_source_table, PIPELINE_SOURCE_TABLE)
+    configuration.write_table(STEP_LABEL, check_log, price_monitor.drop(columns=["renewed_units"]), PRICE_MONITOR_TABLE)
+
+    # [5] the count
+    configuration.log_action(STEP_LABEL, 5, "counting the checks")
     configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
 
-    # [5] the table on screen
-    configuration.log_action(STEP_LABEL, 5, "the pipeline sources, as Power BI will show them:")
+    # [6] the tables on screen
+    configuration.log_action(STEP_LABEL, 6, "the pipeline sources, as Power BI will show them, and the last 13 months "
+                                            "of the price increase monitor:")
     configuration.show_table(pipeline_source_table)
+    configuration.show_table(price_monitor.drop(columns=["renewed_units"]).tail(13))
 
-    return {"pipeline_source": pipeline_source_table}
+    return {"pipeline_source": pipeline_source_table, "price_monitor": price_monitor.drop(columns=["renewed_units"])}
 
+
+
+def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> pd.DataFrame:
+    """One row per closed pipeline month: the uplift of everyone, the uplift of those who never had a
+    softcancel, and the detection of price increases over it.
+
+    INPUT:   the core. Its columns are read IF PRESENT, by name: the exact uplift base
+             (forecast_to_renew_USD_renewed), the never-softcancel measures
+             (forecast_to_renew_units_without_softcancel, forecast_renewed_units_without_softcancel,
+             forecast_renewed_USD_without_softcancel) and their exact base
+             (forecast_to_renew_USD_renewed_without_softcancel). Each uplift uses its exact base when it
+             is there and the approximation renewed units × the row's due price when it is not.
+    OUTPUT:  one row per period: uplift, uplift_never_softcancel, share_due_never_softcancel,
+             rate_units_never_softcancel, uplift_previous_12 (average of the previous 12 months, NaN with
+             fewer than MIN_REFERENCE_MONTHS), uplift_step (the month over that average, − 1),
+             above_threshold (step ≥ PRICE_STEP_THRESHOLD), price_increase_flag (1 in the FIRST month of
+             a run of ≥ PERSISTENCE_MONTHS months above the threshold: an increase is a step that stays,
+             one noisy month is not), in_increase_cycle (a flagged month in this or the previous
+             CYCLE_MONTHS − 1 months) and months_since_increase. A run still too short at the end of the
+             history is not flagged yet: it is confirmed when its months close.
+    RULES:   the detector runs on the never-softcancel uplift when its columns are present (no retention
+             discounts in it), on the plain uplift otherwise; attrs["detector_series"] says which.
+             A price increase raises the uplift of the renewals of ONE cycle: who renews pays the new
+             tariff against the old one. A cycle later everyone due already bought at the new tariff and
+             the step fades, so in_increase_cycle marks exactly CYCLE_MONTHS months per detected step.
+    """
+    closed = core_table[(core_table["forecast_status"] == "actual") & (core_table["forecast_universe"] == "pipeline")
+                        & (core_table["forecast_to_renew_units"] > 0)].copy()
+    closed["_precio_fila"] = closed["forecast_to_renew_USD"] / closed["forecast_to_renew_units"]
+    closed["_base_aproximada"] = closed["forecast_renewed_units"] * closed["_precio_fila"]
+    exact_base_column = "forecast_to_renew_USD_renewed"
+    never_softcancel_columns = ["forecast_to_renew_units_without_softcancel", "forecast_renewed_units_without_softcancel",
+                                "forecast_renewed_USD_without_softcancel"]
+    never_softcancel_exact_base_column = "forecast_to_renew_USD_renewed_without_softcancel"
+    with_exact_base = exact_base_column in closed.columns
+    with_never_softcancel = all(column in closed.columns for column in never_softcancel_columns)
+    with_never_softcancel_exact_base = never_softcancel_exact_base_column in closed.columns
+    if with_never_softcancel:
+        closed["_base_aproximada_nunca_sc"] = closed["forecast_renewed_units_without_softcancel"] * closed["_precio_fila"]
+
+    summed = closed.groupby("period").sum(numeric_only=True)
+    monitor = pd.DataFrame(index=summed.index)
+    monitor["renewed_units"] = summed["forecast_renewed_units"]
+    uplift_base = summed[exact_base_column] if with_exact_base else summed["_base_aproximada"]
+    monitor["uplift"] = summed["forecast_renewed_USD"] / uplift_base.where(uplift_base > 0)
+    if with_never_softcancel:
+        monitor["share_due_never_softcancel"] = (summed["forecast_to_renew_units_without_softcancel"]
+                                                 / summed["forecast_to_renew_units"])
+        due_never = summed["forecast_to_renew_units_without_softcancel"]
+        monitor["rate_units_never_softcancel"] = (summed["forecast_renewed_units_without_softcancel"]
+                                                  / due_never.where(due_never > 0))
+        base_never = (summed[never_softcancel_exact_base_column] if with_never_softcancel_exact_base
+                      else summed["_base_aproximada_nunca_sc"])
+        monitor["uplift_never_softcancel"] = (summed["forecast_renewed_USD_without_softcancel"]
+                                              / base_never.where(base_never > 0))
+    else:
+        monitor["share_due_never_softcancel"] = np.nan
+        monitor["rate_units_never_softcancel"] = np.nan
+        monitor["uplift_never_softcancel"] = np.nan
+    monitor = monitor.sort_index().reset_index()
+
+    # the detector: the chosen series against the average of its previous 12 months
+    detector_series = "uplift_never_softcancel" if with_never_softcancel else "uplift"
+    detector = monitor[detector_series]
+    monitor["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=MIN_REFERENCE_MONTHS).mean()
+    monitor["uplift_step"] = detector / monitor["uplift_previous_12"] - 1
+    above = ((monitor["uplift_step"] >= PRICE_STEP_THRESHOLD) & monitor["uplift_previous_12"].notna()).to_numpy()
+    monitor["above_threshold"] = above.astype(int)
+    flags = np.zeros(len(monitor), dtype=int)
+    position = 0
+    while position < len(above):
+        if not above[position]:
+            position += 1
+            continue
+        run_end = position
+        while run_end < len(above) and above[run_end]:
+            run_end += 1
+        if run_end - position >= PERSISTENCE_MONTHS:
+            flags[position] = 1                      # the increase starts where the run starts
+        position = run_end
+    monitor["price_increase_flag"] = flags
+    monitor["in_increase_cycle"] = (monitor["price_increase_flag"].rolling(window=CYCLE_MONTHS, min_periods=1)
+                                    .max().astype(int))
+    months_since = []
+    last_flagged_position = None
+    for position, flagged in enumerate(monitor["price_increase_flag"]):
+        if flagged:
+            last_flagged_position = position
+        months_since.append(position - last_flagged_position if last_flagged_position is not None else np.nan)
+    monitor["months_since_increase"] = months_since
+    monitor.attrs["detector_series"] = detector_series
+    return monitor
 
 def build_pipeline_source_table() -> pd.DataFrame:
     """One row per pipeline source: code, business label, block and order."""

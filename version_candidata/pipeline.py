@@ -137,7 +137,10 @@ def contracts(configuration: Config) -> dict:
         "core": [TableContract("core", "fine row of the extract, gap, synthetic or time_series row", (), ("s03_fs_id",))],
         "forecast_series": [TableContract("forecast_series", "forecast series", ("s03_fs_id",), ())],
         "power_bi": [TableContract("power_bi.pipeline_source", "forecast pipeline source", ("forecast_pipeline_source",),
-                                   ("source_label", "source_block", "source_order"), part="pipeline_source")],
+                                   ("source_label", "source_block", "source_order"), part="pipeline_source"),
+                     TableContract("power_bi.price_monitor", "closed pipeline month", ("period",),
+                                   ("uplift", "uplift_step", "price_increase_flag", "in_increase_cycle"),
+                                   part="price_monitor")],
     }
 
 
@@ -434,8 +437,8 @@ def sff_steps() -> list:
         return {"pool_dynamics": pool_dynamics, "portfolio_profile": profile, "portfolio_dynamics": portfolio}
 
     def uplift(context):
-        cells, contract_check = estimate_uplift(context["fine_table"], context.configuration)
-        return {"uplift_cells": cells, "contract_check": contract_check}
+        cells, contract_check, homogeneity = estimate_uplift(context["fine_table"], context.configuration)
+        return {"uplift_cells": cells, "contract_check": contract_check, "uplift_homogeneity": homogeneity}
 
     def uplift_backtest(context):
         backtest, verdict = backtest_uplift(context["fine_table"], context.configuration)
@@ -509,7 +512,8 @@ def sff_steps() -> list:
         Step("dynamics", "13", ("pool_series", "pool_reference"), ("pool_dynamics", "portfolio_profile", "portfolio_dynamics"), dynamics, module="step_13_dynamics"),
         Step("backtest", "14", ("pool_series", "pool_reference"), ("backtest",),
              lambda context: {"backtest": run_backtest(context["pool_series"], context["pool_reference"], context.configuration)}, module="step_14_backtest"),
-        Step("uplift", "15", ("fine_table",), ("uplift_cells", "contract_check"), uplift, module="step_15_uplift"),
+        Step("uplift", "15", ("fine_table",), ("uplift_cells", "contract_check", "uplift_homogeneity"), uplift,
+             module="step_15_uplift"),
         Step("uplift_backtest", "16", ("fine_table",), ("uplift_backtest", "uplift_verdict"), uplift_backtest, module="step_16_uplift_backtest"),
         Step("forecast", "17", ("fine_table", "forecast_units", "series_estimate", "pool_series", "pool_reference", "backtest",
                                 "uplift_cells", "uplift_verdict", "rated_units"), ("forecast",), forecast, module="step_17_forecast"),

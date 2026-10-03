@@ -183,6 +183,29 @@ def region_columns_of(configuration) -> list:
     return list(configuration.ts_region_columns) or [configuration.business_mandatory_dims[0]]
 
 
+def forecast_column_of_closed_month_measure(measure_column: str) -> str:
+    """The name in the final block of the core of a closed-month measure, like the rest of the block: total_
+    becomes forecast_, tr becomes to_renew and usd becomes USD (total_tr_units_without_softcancel →
+    forecast_to_renew_units_without_softcancel; total_renewed_usd_without_softcancel →
+    forecast_renewed_USD_without_softcancel)."""
+    name = measure_column[len("total_"):] if measure_column.startswith("total_") else measure_column
+    renamed_words = {"usd": "USD", "tr": "to_renew"}
+    words = [renamed_words.get(word, word) for word in name.split("_")]
+    return "forecast_" + "_".join(words)
+
+
+def total_column_of_closed_month_measure(measure_column: str, configuration) -> str:
+    """The measure a closed-month measure is a part of, by its name: the due or the renewed side, in units or
+    in USD (total_tr_units_without_softcancel is a part of the units due). Step 01 checks it is not above it."""
+    words = measure_column.lower().split("_")
+    in_usd = "usd" in words
+    if "tr" in words and "renewed" in words and in_usd and configuration.renewed_pipeline_usd_col:
+        return configuration.renewed_pipeline_usd_col        # the renewers' due value of a subset: a part of the exact base
+    if "tr" in words:
+        return configuration.pipeline_usd_col if in_usd else configuration.pipeline_units_col
+    return configuration.renewed_usd_col if in_usd else configuration.renewed_units_col
+
+
 def join_columns(frame: pd.DataFrame, columns: list) -> pd.Series:
     """The "|"-joined id of every row from several columns, in the given order (the order
     is part of the id); a null value is written "null". Built on arrays, not Series, so a
@@ -234,6 +257,18 @@ class Config:
     renewed_units_col: str = "total_renewed_units"          # subscriptions renewed
     renewed_usd_col: str = "total_renewed_usd"              # their value at renewal
     extra_measure_cols: list = field(default_factory=list)  # other measures (reacquisitions, AUVs): declared, not used yet
+    renewed_pipeline_usd_col: Optional[str] = None  # the USD that was FALLING DUE of the contracts that RENEWED
+                                                    # (built per licence, then summed): the exact base of the uplift.
+                                                    # Only known once the month closes, so it gets the closed-month
+                                                    # treatment below. None = not in the extract: the uplift falls back
+                                                    # to renewed units × the row's average due price (an approximation
+                                                    # that is exact only if renewers were worth the row's average)
+    closed_month_measure_cols: list = field(default_factory=list)  # measures only known once the month CLOSES (e.g. the units
+                                                                   # due, renewed units and renewed USD of those who never had a
+                                                                   # softcancel, before, during or after the renewal): treated like
+                                                                   # the renewals (null in a closed month = 0, wiped from the
+                                                                   # current month on) and carried to the core as forecast_* in
+                                                                   # the closed months
     flag_time_series_col: str = "flag_time_series"          # marks the rows of the time_series universe
 
     business_mandatory_dims: list = field(default_factory=list)       # open the series and the uplift cell
@@ -576,6 +611,13 @@ class Config:
         return [column_name for column_name in self.business_mandatory_dims if column_name not in self.generated_columns]
 
     @property
+    def all_closed_month_measure_cols(self) -> list:
+        """Every measure with the closed-month treatment (null closed = 0, wiped from the current month on,
+        carried to the core as forecast_*): the declared list plus the uplift base, when there is one."""
+        exact_uplift_base = [self.renewed_pipeline_usd_col] if self.renewed_pipeline_usd_col else []
+        return list(self.closed_month_measure_cols) + exact_uplift_base
+
+    @property
     def rate_series_columns(self) -> list:
         """The columns that define ONE renewal-rate series: mandatory + timevarying +
         extra_renovacion, in this order (the field order of fs_id and fu_id)."""
@@ -627,7 +669,7 @@ class Config:
         # [1] every (column, role) pair the Config declares
         declared_pairs = [(self.period_col, COLUMN_ROLE_PERIOD),
                           (self.flag_time_series_col, COLUMN_ROLE_TIME_SERIES_FLAG)]
-        for measure_column in self.core_measures + list(self.extra_measure_cols):
+        for measure_column in self.core_measures + list(self.extra_measure_cols) + self.all_closed_month_measure_cols:
             declared_pairs.append((measure_column, COLUMN_ROLE_MEASURE))
         for mandatory_column in self.business_mandatory_dims:
             declared_pairs.append((mandatory_column, COLUMN_ROLE_MANDATORY))

@@ -80,6 +80,14 @@ def production_configuration() -> Config:
         discount_value_column="discount",
         # the other columns of the extract
         extra_measure_cols=["total_reacquired_units", "total_reacquired_usd"],   # an AUV is USD / units: computed, not read
+        # the exact base of the uplift: the USD that was falling due of the contracts that RENEWED (built per
+        # licence and summed). With it, the uplift is pure revaluation, conditional on renewing
+        renewed_pipeline_usd_col="total_tr_usd_renewed",
+        # only known once the month closes: the units due, renewed units and renewed USD of those who never had a
+        # softcancel (before, during or after the renewal), the reference to see a price increase without the
+        # retention discounts
+        closed_month_measure_cols=["total_tr_units_without_softcancel", "total_renewed_units_without_softcancel",
+                                   "total_renewed_usd_without_softcancel", "total_tr_usd_renewed_without_softcancel"],
         ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
         # the simulation window (current month → December): what happens in it falls due in 2027
         term_column="tr_term",
@@ -109,6 +117,9 @@ def synthetic_configuration() -> Config:
         # discount: the framework derives the bucket, so the synthetic's is ignored
         discount_value_column="discount_pct",
         ignore_cols=["dataset_role", "is_current_month", "discount"],
+        renewed_pipeline_usd_col="total_tr_usd_renewed",
+        closed_month_measure_cols=["total_tr_units_without_softcancel", "total_renewed_units_without_softcancel",
+                                   "total_renewed_usd_without_softcancel", "total_tr_usd_renewed_without_softcancel"],
         # the simulation window: acquisitions are newcust = 1
         acquisition_column="newcust",
         acquisition_values=[1],

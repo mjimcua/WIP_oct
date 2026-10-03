@@ -261,7 +261,8 @@ def columns_that_split_the_grain(repeated_rows: pd.DataFrame, grain_columns: lis
     """The raw columns (not measures, not the ids added here) that take more than one value
     inside at least one repeated fine row, with how many groups: they are what makes the
     raw finer than the declared dimensions. Sorted by groups, most first."""
-    measure_columns = set(configuration.core_measures) | set(configuration.extra_measure_cols)
+    measure_columns = (set(configuration.core_measures) | set(configuration.extra_measure_cols)
+                       | set(configuration.all_closed_month_measure_cols))
     added_columns = set(KEY_OF_ID) | set(KEY_OF_ID.values()) | {ROW_KEY_COLUMN, configuration.discount_bucket_column}
     candidate_columns = [column_name for column_name in repeated_rows.columns
                          if column_name not in measure_columns and column_name not in added_columns

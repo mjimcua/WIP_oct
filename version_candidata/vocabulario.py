@@ -145,6 +145,7 @@ RATE_FROM_GLOBAL = "global"                  # nothing else: the rate of the who
 
 TABLE_UPLIFT_CELLS = "uplift_celda"          # step 15: the uplift of every uplift cell
 TABLE_CONTRACT_CHECK = "uplift_contrato_check"   # step 15: the contract rule against the past renewals
+TABLE_UPLIFT_HOMOGENEITY = "uplift_homogeneidad"   # step 15: the renewers' due price against their cell's (exact base only)
 TABLE_UPLIFT_BACKTEST = "backtest_uplift"    # step 16: statistical vs contract in the exam months
 TABLE_FORECAST = "forecast"                  # step 17: every future fine row with its forecast and bands
 TABLE_FORECAST_MONTH = "forecast_mes"        # step 17: the total by month with its bands

@@ -45,7 +45,7 @@ def test_steps_15_to_18() -> None:
     configuration = synthetic_with()
     results = {}
     console = console_of(lambda: results.update(run(configuration)))
-    for label, count in (("15", 5), ("16", 3), ("17", 8)):
+    for label, count in (("15", 6), ("16", 3), ("17", 8)):
         check(f"{count} checks: {count} ok" in console.split(f"STEP {label}")[1], f"the checks of step {label} pass")
     check("7 checks:" in console.split("STEP 18")[1] and "0 failed" in console.split("STEP 18")[1].split("STEP NU")[0],
           "the final validation passes (warnings allowed)")
@@ -55,8 +55,16 @@ def test_steps_15_to_18() -> None:
     renewers = fine[fine["rol"].isin(["entrenamiento", "examen"]) & (fine["total_renewed_units"] > 0)]
     one_cell = cells[cells["uplift_origen"] == "propia"].iloc[0]
     rows = renewers[renewers["uplift_cell_id"] == one_cell["uplift_cell_id"]]
-    expected = rows["total_renewed_usd"].sum() / (rows["total_renewed_units"] * rows["total_tr_usd"] / rows["total_tr_units"]).sum()
-    check(abs(one_cell["uplift"] - expected) < 1e-9, "the uplift of a cell = Σ renewed USD / Σ (renewed units × pipeline AUV)")
+    expected = rows["total_renewed_usd"].sum() / rows["total_tr_usd_renewed"].sum()
+    check(abs(one_cell["uplift"] - expected) < 1e-9,
+          "the uplift of a cell = Σ renewed USD / Σ (the USD that was falling due of the contracts that renewed)")
+    homogeneity = results["uplift_homogeneity"]
+    same_cell = homogeneity[homogeneity["uplift_cell_id"] == one_cell["uplift_cell_id"]].iloc[0]
+    check(abs(same_cell["uplift_aproximado"] - same_cell["uplift_exacto"] * same_cell["ratio_seleccion"]) < 1e-9,
+          "homogeneity: the approximate uplift = the exact one × the selection ratio (the old base hid that factor)")
+    check("the claim '100-105 %':" in console and "histogram · every series in the distribution" in console
+          and "█" in console and "month by month (24 closed" in console,
+          "the revaluation report prints the claim, the histogram and the monthly path on screen (action 9)")
     check(results["uplift_verdict"]["via_usada_con_descuento"] == "estadistica",
           "in the synthetic the contract rule loses (observed 1.50 vs rule 1.67 at 40 %): the statistical path is used")
 

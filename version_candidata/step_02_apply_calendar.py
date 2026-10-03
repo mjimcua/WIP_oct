@@ -109,6 +109,8 @@ def apply_calendar(validated: pd.DataFrame, configuration: Config) -> pd.DataFra
     null_closed_rows = closed_rows & calendared[configuration.renewed_units_col].isna()
     null_renewals_read_as_zero = int(null_closed_rows.sum())
     calendared.loc[null_closed_rows, renewed_columns] = 0.0
+    for closed_month_column in configuration.all_closed_month_measure_cols:      # each on its own: it may be null alone
+        calendared.loc[closed_rows, closed_month_column] = calendared.loc[closed_rows, closed_month_column].fillna(0.0)
     configuration.log_action(STEP_LABEL, 3, f"{null_renewals_read_as_zero:,} null renewals of closed months read as 0")
 
     # [4] the current month and later: wipe the renewals already booked
@@ -117,6 +119,8 @@ def apply_calendar(validated: pd.DataFrame, configuration: Config) -> pd.DataFra
     wiped_units = float(early_results[configuration.renewed_units_col].sum())
     wiped_usd = float(early_results[configuration.renewed_usd_col].sum())
     calendared.loc[projection_rows, renewed_columns] = np.nan
+    for closed_month_column in configuration.all_closed_month_measure_cols:      # only known at close: partial too, wiped too
+        calendared.loc[projection_rows, closed_month_column] = np.nan
     configuration.log_action(STEP_LABEL, 4, f"{rows_with_early_results:,} rows from {boundaries['current']} on had "
                                             f"renewals already booked: wiped {wiped_units:,.0f} units · ${wiped_usd:,.0f}")
 

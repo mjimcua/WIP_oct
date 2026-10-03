@@ -41,6 +41,13 @@ Una fila por registro: las filas del extracto, los huecos (meses sin vencimiento
 | Unidad | `s04_filas_finas`, `s07_moe_pp_max` | el detalle de la forecast unit |
 | Forecast | `s17_*`, `s17_confidence` | tasa, banda, uplift, esperado y confianza de cada fila futura |
 | Final | `forecast_*` | lo que se suma para responder: renovado real y previsto, pipeline, por año y origen |
+| Final, medidas de mes cerrado | `forecast_to_renew_units_without_softcancel`, `forecast_renewed_units_without_softcancel`, `forecast_renewed_USD_without_softcancel` (una por cada `closed_month_measure_cols` de la Config) | solo se conocen cuando el mes cierra: rellenas en los meses cerrados del extracto, vacías en el resto. Son los contratos que nunca tuvieron softcancel (antes, durante ni después de la renovación): la referencia para ver una subida de precio sin descuentos de retención. Revalorización sin softcancel = Σ renovado USD / Σ (unidades renovadas × precio unitario de la fila), solo sobre los que renuevan, como el paso 15 |
+| Final, base exacta del uplift | `forecast_to_renew_USD_renewed` (de `renewed_pipeline_usd_col`) | el USD que vencía de los contratos que RENOVARON (construido licencia a licencia). Con él, uplift = Σ renovado USD / Σ esta columna: revalorización pura, condicionada a renovar. Rellena solo en meses cerrados del extracto |
+
+## Tablas del uplift y del monitor de precios
+
+- `sff_uplift_homogeneidad` (paso 15, solo con la base exacta): una fila por celda de uplift con renovadores. `ratio_seleccion` = precio medio que vencía de los renovadores / precio medio de la celda: a 1, los renovadores valían la media y la aproximación antigua era exacta; por encima, renuevan más los caros y la aproximación inflaba el uplift en ese ratio (`uplift_aproximado = uplift_exacto × ratio_seleccion`). Donde se aleja de 1, la celda mezcla precios: la respuesta es segmentar mejor, no añadir un factor al forecast.
+- `sff_price_increase_monitor` (paso 22): una fila por mes cerrado de pipeline. El uplift de todos y el de los que nunca tuvieron softcancel (el detector: sin descuentos de retención), la media de los 12 meses anteriores, el escalón frente a ella, `above_threshold` (escalón ≥ 3 %), `price_increase_flag` (primer mes de una racha de ≥ 3 meses seguidos por encima: un mes suelto es ruido, no una subida), `in_increase_cycle` y `months_since_increase`. El uplift sin softcancel usa su base exacta (`forecast_to_renew_USD_renewed_without_softcancel`) cuando está. Una subida afecta a las renovaciones de UN ciclo (quien renueva paga la tarifa nueva contra la vieja; un año después todo lo que vence ya compró a la nueva), así que el ciclo dura 12 meses y se apaga.
 
 ## La dimensión: `sff_forecast_series`
 

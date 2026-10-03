@@ -86,6 +86,18 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 - Reglas de escritura a la escala del extracto real (~1 M filas) y protocolo de prueba de cualquier cambio de
   rendimiento (tablas idénticas bit a bit con `table_equivalence.py`): `DOC_rendimiento.md`.
 
+## Uplift con base exacta (3-oct-2026)
+- `total_tr_usd_renewed` en el extracto (licencia a licencia: lo que valía cada licencia QUE RENOVÓ, sumado) y declarado como `renewed_pipeline_usd_col`: el uplift pasa a ser revalorización pura, condicionada a renovar, comparable con la regla de contrato. Sin la columna, el paso 15 vuelve a la aproximación y lo dice en el log.
+- `sff_uplift_homogeneidad` mide dónde la segmentación no basta (ratio_seleccion ≠ 1) y `sff_price_increase_monitor` detecta subidas de precio sobre el uplift de los que nunca tuvieron softcancel, con su ciclo de 12 meses.
+- Pendiente de decisión: estimar el uplift estadístico solo con meses fuera de ciclo de subida (ver la propuesta del 3-oct), tras ejecutar F1/F2 con datos reales.
+
+## Revisión de la librería, 3-oct-2026: pendientes de decidir (no tocados)
+- **Dos aritméticas de uplift de respaldo**: el paso 15 calcula cada nivel (propia, padre, celda, global) como cociente de sumas; el 17, para una celda nunca vista (fila extendida con tramo nuevo), usa la media de uplifts ponderada por renovadores.
+- **El padre de una celda de uplift descarta los extras de revalorización** (`msrp_increased`, `price_cap`): al heredar mezcla regímenes de precio (sospecha H2; pendiente de F2 con datos reales).
+- **La auditoría no verifica el uplift por su cuenta**: sus `expected_usd_*` vienen de `esperado_usd` del forecast; su independencia cubre la cadena de tasas, no la de precio.
+- **La GUIA describe el uplift con la redacción y los recuentos de una ejecución anterior**: actualizar al revisar la próxima salida de consola.
+- Resueltos en la misma revisión: el detector sin softcancel ya usa su base exacta (`total_tr_usd_renewed_without_softcancel`), y el backtest del uplift (paso 16) juzga con la base que usará el forecast (unidades renovadas × precio medio de la fila), no con la exacta de los renovadores.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

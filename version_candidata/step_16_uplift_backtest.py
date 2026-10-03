@@ -6,9 +6,15 @@ HOW THE TEST WORKS:
   · the statistical uplift of every cell is estimated ONLY with the renewals of the months
     BEFORE the exam (no peeking);
   · in the exam months, for every row that renewed, the renewed money is predicted GIVEN
-    its real renewed units (so only the price is judged, not the rate):
+    its real renewed units (so only the price is judged, not the rate), the SAME way the
+    forecast computes it (USD due × rate × uplift = renewed units × pipeline AUV × uplift once
+    the real rate is given):
         statistical   renewed units × pipeline AUV × uplift of its cell
         contract      renewed units × pipeline AUV × 1 / (1 − discount)   (known discount only)
+    The base is the row's average price, NOT the exact value of the renewers that step 15 uses
+    to ESTIMATE the uplift: the forecast cannot know who will renew, so it values them at the
+    row's average, and the test must judge that. Where renewers were worth more than the
+    average (sff_uplift_homogeneidad), the error shows up here, as it will in the forecast.
   · both are compared on the SAME rows (the ones with a known discount): WAPE = Σ|predicted −
     real| / Σ real, and the bias of the total = (Σ predicted − Σ real) / Σ real;
   · VERDICT: the contract path is used in the forecast, where the discount is known, only if
@@ -74,11 +80,13 @@ def backtest_uplift(fine_table: pd.DataFrame, configuration: Config) -> tuple:
     # [2] the renewals of the exam, predicted by both paths
     exam_rows = renewer_rows(fine_table, configuration)
     exam_rows = exam_rows[exam_rows[CALENDAR_ROLE_COLUMN] == ROLE_TEST].copy()
-    exam_rows["pred_" + PATH_STATISTICAL] = exam_rows["_denominador"] * exam_rows[UPLIFT_CELL_ID_COLUMN].map(
+    # the base the forecast will use: the renewed units at the row's average due price (not the exact base)
+    forecast_base = exam_rows["_denominador_aproximado"]
+    exam_rows["pred_" + PATH_STATISTICAL] = forecast_base * exam_rows[UPLIFT_CELL_ID_COLUMN].map(
         cells.set_index(UPLIFT_CELL_ID_COLUMN)["uplift"])
     discount = configuration.discount_value_column
     known = exam_rows[discount].notna() if discount else pd.Series(False, index=exam_rows.index)
-    exam_rows["pred_" + PATH_CONTRACT] = np.where(known, exam_rows["_denominador"] / (1 - exam_rows[discount].clip(upper=0.99))
+    exam_rows["pred_" + PATH_CONTRACT] = np.where(known, forecast_base / (1 - exam_rows[discount].clip(upper=0.99))
                                                   if discount else np.nan, np.nan)
     configuration.log_action(STEP_LABEL, 2, f"{len(exam_rows):,} renewer rows in the exam; {int(known.sum()):,} with a known discount")
 

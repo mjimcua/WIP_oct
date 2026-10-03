@@ -102,7 +102,7 @@ import numpy as np
 import pandas as pd
 
 from config import (ACTIVE_FLAG_VALUES, GENERATED_LEVEL_SUFFIX, STATUS_FAILED, Config, join_columns,
-                    region_columns_of, roles_overview)
+                    region_columns_of, roles_overview, total_column_of_closed_month_measure)
 from vocabulario import ROLE_TRAIN, TABLE_DIMENSION_LEVEL_VALUES, TABLE_DIMENSION_LEVELS
 
 
@@ -250,6 +250,16 @@ def check_the_values(renewal_raw: pd.DataFrame, configuration: Config, check_log
         check_no_negatives(configuration, check_log, renewal_raw, pipeline_column, "every month")
     for renewed_column in (configuration.renewed_units_col, configuration.renewed_usd_col):
         check_no_negatives(configuration, check_log, closed_rows, renewed_column, "closed months")
+    for closed_month_column in configuration.all_closed_month_measure_cols:
+        check_no_negatives(configuration, check_log, closed_rows, closed_month_column, "closed months")
+        # a part cannot be more than its whole: the due or the renewed, in units or USD, by its name
+        total_column = total_column_of_closed_month_measure(closed_month_column, configuration)
+        above_total = closed_rows[closed_rows[closed_month_column] > closed_rows[total_column] + 0.01]
+        configuration.log_check(STEP_LABEL, check_log, f"{closed_month_column} is not above {total_column}, closed months",
+                                above_total.empty,
+                                failure_detail=f"{len(above_total):,} closed rows with {closed_month_column} above "
+                                               f"{total_column} (a part of the renewed above the renewed)",
+                                blocking=False, examples=example_rows(above_total, configuration))
 
     # how "nobody renewed" arrives: null (a LEFT JOIN with no match) or 0. A null is not an
     # error but it is not a number either: step 02 reads it as 0.
@@ -281,6 +291,22 @@ def check_the_values(renewal_raw: pd.DataFrame, configuration: Config, check_log
                             usd_without_units.empty,
                             failure_detail=f"{len(usd_without_units):,} closed rows have renewed USD with 0 renewed units",
                             examples=example_rows(usd_without_units, configuration))
+
+    if configuration.renewed_pipeline_usd_col:
+        base_column = configuration.renewed_pipeline_usd_col
+        base_values = closed_rows[base_column]
+        value_without_renewers = closed_rows[(renewed_units == 0) & (base_values > 0)]
+        configuration.log_check(STEP_LABEL, check_log, f"{base_column} is 0 where nothing renewed, closed months",
+                                value_without_renewers.empty,
+                                failure_detail=f"{len(value_without_renewers):,} closed rows carry a renewers' due value "
+                                               f"with 0 renewed units",
+                                blocking=False, examples=example_rows(value_without_renewers, configuration))
+        renewers_without_value = closed_rows[(renewed_units > 0) & (base_values.fillna(0) == 0)]
+        configuration.log_check(STEP_LABEL, check_log, f"{base_column} is above 0 where something renewed, closed months",
+                                renewers_without_value.empty,
+                                failure_detail=f"{len(renewers_without_value):,} closed rows renew units with no renewers' "
+                                               f"due value (their uplift cannot be computed: they are left out of it)",
+                                blocking=False, examples=example_rows(renewers_without_value, configuration))
 
     # [4] the dimensions and the timevarying flags
     configuration.log_action(STEP_LABEL, 4, f"checking {len(dimension_columns(configuration))} dimensions and "
