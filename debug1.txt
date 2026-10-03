@@ -1,0 +1,25 @@
+DECLARE @current_month CHAR(7) = (SELECT MIN(period) FROM dbo.sff_nucleo WHERE forecast_status = 'forecast');
+DECLARE @start_month   CHAR(7) = FORMAT(DATEADD(MONTH, -12, CAST(@current_month + '-01' AS DATE)), 'yyyy-MM');
+DECLARE @end_month     CHAR(7) = FORMAT(DATEADD(MONTH,  12, CAST(@current_month + '-01' AS DATE)), 'yyyy-MM');
+
+WITH rows_with_pipeline AS (
+    SELECT CASE WHEN period >= @start_month AND period < @current_month THEN '1 · last 12 closed months'
+                WHEN period >= @current_month AND period < @end_month THEN '2 · next 12 months' END AS comparison_window,
+           forecast_pipeline_source,
+           forecast_to_renew_units, forecast_to_renew_USD, forecast_renewed_units, forecast_renewed_USD
+    FROM dbo.sff_nucleo
+    WHERE forecast_to_renew_units > 0
+)
+SELECT comparison_window,
+       COALESCE(forecast_pipeline_source, 'TOTAL')                                          AS pipeline_source,
+       SUM(forecast_to_renew_units)                                                         AS to_renew_units,
+       SUM(forecast_to_renew_USD)                                                           AS to_renew_USD,
+       SUM(forecast_renewed_units) / SUM(forecast_to_renew_units)                           AS rate_units,
+       SUM(forecast_renewed_USD)   / SUM(forecast_to_renew_USD)                             AS rate_USD,
+       -- price of a renewed unit / price of a unit due: > 1 = revaluation (the discount lost)
+       (SUM(forecast_renewed_USD) / NULLIF(SUM(forecast_renewed_units), 0))
+         / (SUM(forecast_to_renew_USD) / SUM(forecast_to_renew_units))                      AS renewed_price_vs_due_price
+FROM rows_with_pipeline
+WHERE comparison_window IS NOT NULL
+GROUP BY GROUPING SETS ((comparison_window, forecast_pipeline_source), (comparison_window))
+ORDER BY comparison_window, pipeline_source;
