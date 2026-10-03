@@ -1,25 +1,189 @@
-DECLARE @current_month CHAR(7) = (SELECT MIN(period) FROM dbo.sff_nucleo WHERE forecast_status = 'forecast');
+/* ═══════════════════════════════════════════════════════════════════════════════════
+   SFF · ¿POR QUÉ LA TASA PREVISTA ES MÁS ALTA QUE LA DE LOS ÚLTIMOS 12 MESES?
+   Cinco queries; cada una separa una causa. Todas comparan las mismas dos ventanas:
+     · últimos 12 meses cerrados   (forecast_status = 'actual')
+     · próximos 12 meses           (forecast_status = 'forecast')
+   solo con filas de la pipeline (forecast_universe = 'pipeline', algo que vence).
+ 
+   Ajustar: el esquema (kamelot), y los nombres de las señales timevarying
+   (softcancel, dormant, autorenew) y del descuento (discount) si en tu extracto difieren.
+   ═══════════════════════════════════════════════════════════════════════════════════ */
+ 
+DECLARE @current_month CHAR(7) = (SELECT MIN(period) FROM kamelot.sff_nucleo WHERE forecast_status = 'forecast');
 DECLARE @start_month   CHAR(7) = FORMAT(DATEADD(MONTH, -12, CAST(@current_month + '-01' AS DATE)), 'yyyy-MM');
 DECLARE @end_month     CHAR(7) = FORMAT(DATEADD(MONTH,  12, CAST(@current_month + '-01' AS DATE)), 'yyyy-MM');
-
-WITH rows_with_pipeline AS (
-    SELECT CASE WHEN period >= @start_month AND period < @current_month THEN '1 · last 12 closed months'
-                WHEN period >= @current_month AND period < @end_month THEN '2 · next 12 months' END AS comparison_window,
-           forecast_pipeline_source,
-           forecast_to_renew_units, forecast_to_renew_USD, forecast_renewed_units, forecast_renewed_USD
-    FROM dbo.sff_nucleo
-    WHERE forecast_to_renew_units > 0
+ 
+ 
+/* ───────────────────────────────────────────────────────────────────────────────────
+   A. MEZCLA FRENTE A TASA (descomposición por forecast serie)
+      ¿Sube la tasa porque cada serie predice más de lo que hizo, o porque la pipeline futura
+      pesa más en series que ya renovaban más?
+        tasa_ultimos_12          la observada
+        tasa_contrafactual       cada serie con SU tasa de los últimos 12, pesada con lo que
+                                 le vence en los próximos 12 (solo series con historia)
+        tasa_prevista_mismas     la prevista, en esas mismas series
+        efecto_mezcla   = contrafactual − últimos 12      (cambia el peso de las series)
+        efecto_tasa     = prevista mismas − contrafactual (cambia la tasa de cada serie)
+      Una técnica simple (media, ma3) daría efecto_tasa ≈ 0.
+   ─────────────────────────────────────────────────────────────────────────────────── */
+WITH last_12 AS (
+    SELECT s03_fs_id,
+           SUM(forecast_to_renew_units) AS due_units,
+           SUM(forecast_renewed_units)  AS renewed_units
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @start_month AND period < @current_month
+    GROUP BY s03_fs_id
+),
+next_12 AS (
+    SELECT s03_fs_id,
+           SUM(forecast_to_renew_units) AS due_units,
+           SUM(forecast_renewed_units)  AS renewed_units
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @current_month AND period < @end_month
+    GROUP BY s03_fs_id
 )
-SELECT comparison_window,
-       COALESCE(forecast_pipeline_source, 'TOTAL')                                          AS pipeline_source,
-       SUM(forecast_to_renew_units)                                                         AS to_renew_units,
-       SUM(forecast_to_renew_USD)                                                           AS to_renew_USD,
-       SUM(forecast_renewed_units) / SUM(forecast_to_renew_units)                           AS rate_units,
-       SUM(forecast_renewed_USD)   / SUM(forecast_to_renew_USD)                             AS rate_USD,
-       -- price of a renewed unit / price of a unit due: > 1 = revaluation (the discount lost)
-       (SUM(forecast_renewed_USD) / NULLIF(SUM(forecast_renewed_units), 0))
-         / (SUM(forecast_to_renew_USD) / SUM(forecast_to_renew_units))                      AS renewed_price_vs_due_price
-FROM rows_with_pipeline
-WHERE comparison_window IS NOT NULL
-GROUP BY GROUPING SETS ((comparison_window, forecast_pipeline_source), (comparison_window))
-ORDER BY comparison_window, pipeline_source;
+SELECT
+    (SELECT SUM(renewed_units) / SUM(due_units) FROM last_12)                          AS tasa_ultimos_12,
+    (SELECT SUM(renewed_units) / SUM(due_units) FROM next_12)                          AS tasa_prevista_todas,
+    SUM(next_12.due_units * last_12.renewed_units / last_12.due_units)
+      / SUM(next_12.due_units)                                                         AS tasa_contrafactual,
+    SUM(next_12.renewed_units) / SUM(next_12.due_units)                                AS tasa_prevista_mismas,
+    SUM(next_12.due_units * last_12.renewed_units / last_12.due_units) / SUM(next_12.due_units)
+      - (SELECT SUM(renewed_units) / SUM(due_units) FROM last_12)                      AS efecto_mezcla,
+    SUM(next_12.renewed_units) / SUM(next_12.due_units)
+      - SUM(next_12.due_units * last_12.renewed_units / last_12.due_units) / SUM(next_12.due_units) AS efecto_tasa,
+    1 - SUM(next_12.due_units) / (SELECT SUM(due_units) FROM next_12)                  AS peso_sin_historia
+FROM next_12
+JOIN last_12 ON last_12.s03_fs_id = next_12.s03_fs_id;
+ 
+ 
+/* ───────────────────────────────────────────────────────────────────────────────────
+   B. LAS SEÑALES: ¿la pipeline futura está menos marcada que la histórica?
+      Si la proporción de softcancel / dormant cae en los próximos 12 y esas filas renuevan
+      mucho menos, la tasa prevista sube por mezcla de señales: la foto de hoy de un mes
+      lejano todavía no ha madurado.
+   ─────────────────────────────────────────────────────────────────────────────────── */
+SELECT
+    CASE WHEN period < @current_month THEN '1 · last 12 closed' ELSE '2 · next 12' END    AS comparison_window,
+    softcancel, dormant, autorenew,
+    SUM(forecast_to_renew_units)                                                          AS due_units,
+    SUM(forecast_to_renew_units) * 1.0
+      / SUM(SUM(forecast_to_renew_units)) OVER (PARTITION BY
+            CASE WHEN period < @current_month THEN 1 ELSE 2 END)                          AS share_of_window,
+    SUM(forecast_renewed_units) / SUM(forecast_to_renew_units)                            AS rate_units
+FROM kamelot.sff_nucleo
+WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+  AND period >= @start_month AND period < @end_month
+GROUP BY CASE WHEN period < @current_month THEN '1 · last 12 closed' ELSE '2 · next 12' END,
+         CASE WHEN period < @current_month THEN 1 ELSE 2 END,
+         softcancel, dormant, autorenew
+ORDER BY comparison_window, softcancel, dormant, autorenew;
+ 
+ 
+/* ───────────────────────────────────────────────────────────────────────────────────
+   C. MES A MES, frente al mismo mes del año anterior
+      Si la diferencia CRECE con la distancia al mes en curso (meses lejanos más altos)
+      y la proporción marcada BAJA con la distancia, es maduración de señales.
+      Si es plana, el efecto está en otra parte (técnica, nivel, mezcla de producto).
+   ─────────────────────────────────────────────────────────────────────────────────── */
+WITH by_month AS (
+    SELECT period,
+           SUM(forecast_to_renew_units)                                                   AS due_units,
+           SUM(forecast_renewed_units) / SUM(forecast_to_renew_units)                     AS rate_units,
+           SUM(CASE WHEN softcancel = 1 OR dormant = 1 THEN forecast_to_renew_units ELSE 0 END)
+             / SUM(forecast_to_renew_units)                                               AS share_flagged
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @start_month AND period < @end_month
+    GROUP BY period
+)
+SELECT future.period                                       AS future_month,
+       DATEDIFF(MONTH, CAST(@current_month + '-01' AS DATE), CAST(future.period + '-01' AS DATE)) AS months_ahead,
+       past.period                                         AS same_month_last_year,
+       past.rate_units                                     AS rate_last_year,
+       future.rate_units                                   AS rate_forecast,
+       future.rate_units - past.rate_units                 AS rate_difference,
+       past.share_flagged                                  AS flagged_last_year,
+       future.share_flagged                                AS flagged_forecast
+FROM by_month AS future
+JOIN by_month AS past
+  ON past.period = FORMAT(DATEADD(MONTH, -12, CAST(future.period + '-01' AS DATE)), 'yyyy-MM')
+WHERE future.period >= @current_month
+ORDER BY future.period;
+ 
+ 
+/* ───────────────────────────────────────────────────────────────────────────────────
+   D. QUIÉN EMPUJA: las 25 forecast series que más suman a la diferencia
+      (tasa prevista − su tasa de los últimos 12) × lo que les vence en los próximos 12,
+      con la técnica y el origen de la tasa. Si unas pocas series explican mucho, es un
+      problema localizado (una técnica, una composición); si está repartido, es estructural.
+   ─────────────────────────────────────────────────────────────────────────────────── */
+WITH last_12 AS (
+    SELECT s03_fs_id,
+           SUM(forecast_renewed_units) / SUM(forecast_to_renew_units) AS rate_last_12
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @start_month AND period < @current_month
+    GROUP BY s03_fs_id
+),
+next_12 AS (
+    SELECT s03_fs_id,
+           MAX(s17_tecnica)                                          AS technique,
+           MAX(s17_origen_tasa)                                      AS rate_origin,
+           SUM(forecast_to_renew_units)                              AS due_units,
+           SUM(forecast_renewed_units) / SUM(forecast_to_renew_units) AS rate_forecast
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @current_month AND period < @end_month
+    GROUP BY s03_fs_id
+)
+SELECT TOP 25
+       next_12.s03_fs_id, next_12.technique, next_12.rate_origin, next_12.due_units,
+       last_12.rate_last_12, next_12.rate_forecast,
+       next_12.rate_forecast - last_12.rate_last_12                          AS rate_difference,
+       (next_12.rate_forecast - last_12.rate_last_12) * next_12.due_units    AS extra_units_renewed
+FROM next_12
+JOIN last_12 ON last_12.s03_fs_id = next_12.s03_fs_id
+ORDER BY ABS((next_12.rate_forecast - last_12.rate_last_12) * next_12.due_units) DESC;
+ 
+-- D2. La diferencia agregada por técnica: si una técnica concentra el efecto_tasa, ahí está
+WITH last_12 AS (
+    SELECT s03_fs_id, SUM(forecast_renewed_units) / SUM(forecast_to_renew_units) AS rate_last_12
+    FROM kamelot.sff_nucleo
+    WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+      AND period >= @start_month AND period < @current_month
+    GROUP BY s03_fs_id
+)
+SELECT nucleo.s17_tecnica,
+       SUM(nucleo.forecast_to_renew_units)                                                 AS due_units,
+       SUM(nucleo.forecast_to_renew_units * last_12.rate_last_12) / SUM(nucleo.forecast_to_renew_units) AS rate_last_12_same_series,
+       SUM(nucleo.forecast_renewed_units) / SUM(nucleo.forecast_to_renew_units)            AS rate_forecast,
+       SUM(nucleo.forecast_renewed_units - nucleo.forecast_to_renew_units * last_12.rate_last_12) AS extra_units_renewed
+FROM kamelot.sff_nucleo AS nucleo
+JOIN last_12 ON last_12.s03_fs_id = nucleo.s03_fs_id
+WHERE nucleo.forecast_universe = 'pipeline' AND nucleo.forecast_to_renew_units > 0
+  AND nucleo.period >= @current_month AND nucleo.period < @end_month
+GROUP BY nucleo.s17_tecnica
+ORDER BY extra_units_renewed DESC;
+ 
+ 
+/* ───────────────────────────────────────────────────────────────────────────────────
+   E. EL PRECIO: ¿el +3 % de precio renovado viene del descuento conocido (regla de
+      contrato) o del desconocido (vía estadística)?
+      precio renovado / precio que vence, por ventana y por si se conoce el descuento.
+   ─────────────────────────────────────────────────────────────────────────────────── */
+SELECT
+    CASE WHEN period < @current_month THEN '1 · last 12 closed' ELSE '2 · next 12' END    AS comparison_window,
+    CASE WHEN discount IS NULL THEN 'discount unknown' ELSE 'discount known' END          AS discount_known,
+    SUM(forecast_to_renew_USD)                                                            AS to_renew_USD,
+    SUM(forecast_renewed_USD) / SUM(forecast_to_renew_USD)                                AS rate_USD,
+    (SUM(forecast_renewed_USD) / NULLIF(SUM(forecast_renewed_units), 0))
+      / (SUM(forecast_to_renew_USD) / SUM(forecast_to_renew_units))                       AS renewed_price_vs_due_price
+FROM kamelot.sff_nucleo
+WHERE forecast_universe = 'pipeline' AND forecast_to_renew_units > 0
+  AND period >= @start_month AND period < @end_month
+GROUP BY CASE WHEN period < @current_month THEN '1 · last 12 closed' ELSE '2 · next 12' END,
+         CASE WHEN discount IS NULL THEN 'discount unknown' ELSE 'discount known' END
+ORDER BY comparison_window, discount_known;
