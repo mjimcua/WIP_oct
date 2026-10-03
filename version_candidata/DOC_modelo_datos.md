@@ -55,6 +55,7 @@ Una fila por forecast serie. Es la tabla que se filtra en Power BI.
 | Técnica | `s14_tecnica_<tramo>`, `s14_examen_err_pp_<tramo>`… | la técnica elegida por tramo y su error en el examen |
 | Dinámica propia | `s13_series_phi`, `s13_series_trend`, `s13_series_seasonal`, `s13_series_measurable`, `s13_series_differs` | la de la propia serie, para cruzarla con la precisión |
 | Examen, ratios | `s19_exam_mae_pp`, `s19_exam_bias_pp`, `s19_exam_wape`, `s19_exam_coverage`, `s19_raw_mae_pp`, `s19_raw_coverage`, `s19_improvement_mae_pp` | cuánto acertó el framework, cuánto la serie sola (raw) y la diferencia |
+| Examen frente al ruido | `s19_exam_rmse_pp`, `s19_exam_noise_pp`, `s19_exam_error_over_noise`, `s19_raw_error_over_noise` | el error frente al ruido binomial de su tasa: ≈ 1 es el límite (la regla del ruido) |
 | Examen, sumables | `s19_exam_predictions`, `s19_exam_in_band`, `s19_exam_pred_units`, `s19_exam_real_units`, `s19_exam_abs_err_units`, `s19_raw_predictions`, `s19_raw_in_band`, `s19_raw_real_units`, `s19_raw_abs_err_units` | para sumar el acierto sobre cualquier filtro |
 | Dinero y confianza | `s17_esperado_usd_total`, `s17_pct_usd_high` / `_medium` / `_low`, `s17_confidence` | lo que se espera renovar y con qué confianza (la de la mayor parte de su dinero) |
 
@@ -92,7 +93,7 @@ Para cruzar el acierto con la dinámica se segmenta por `s13_series_*` (por ejem
 
 | Tabla | Una fila por | Clave | Para qué |
 |---|---|---|---|
-| `sff_series_exam_detail` | forecast serie × mes de examen × horizonte × método | `fs_id` | cada predicción del examen (raw, framework, hoja), trazada: tasa de la composición, desplazamiento por credibilidad, tasa, intervalo, real, error |
+| `sff_series_exam_detail` | forecast serie × mes de examen × horizonte × método | `fs_id` | cada predicción del examen (raw, framework, hoja), trazada: tasa de la composición, desplazamiento por credibilidad, tasa, intervalo, real, error y su ruido binomial (`noise_pp`) |
 | `sff_series_exam` | forecast serie | `fs_id` | el examen resumido por método, raw y framework lado a lado (la dimensión lo lleva) |
 | `sff_ladder_steps` | forecast serie × pasada | `fs_id` | su id en cada pasada, el soporte de su grupo y si ya tiene composición |
 | `sff_ladder_merges` | forecast serie × fusión | `fs_id` | grupo antes y después, sesgo, error sola y junta, y si la fusión mejora |
@@ -107,6 +108,19 @@ Para cruzar el acierto con la dinámica se segmenta por `s13_series_*` (por ejem
 | `sff_series_backtest` | forecast serie × mes de examen × horizonte × técnica | `fs_id` | cada técnica aplicada a la forecast serie, con su intervalo |
 | `sff_series_technique_summary` | forecast serie × tramo × técnica | `fs_id` | error medio, sesgo, WAPE, ranking en la serie, elegida, mejor para la serie |
 | `sff_dimension_levels` | dimensión × grupo | — | los grupos generados de `level_1` (paso 01b), con su tasa estandarizada por año |
+| `sff_dimension_level_values` | dimensión × valor | — | cada valor de una dimensión con nivel generado: su grupo, soporte, tasa, ruido y años |
+
+## Los informes agregados no son tablas
+
+Un informe con pocas filas porque está muy agregado se reproduce con una consulta sobre las tablas de detalle. El paso
+que lo calcula imprime esa consulta (`report_queries.py`), y los tests comprueban que da el mismo resultado:
+
+- las filas que el framework añade o borra (paso 21): no se escribe, desde `sff_nucleo`;
+- el calendario por rol y por mes (paso 02), desde `sff_nucleo`;
+- el examen por método y horizonte, y por mes (paso 19), desde `sff_series_exam_detail`;
+- el total por año y origen (paso 20), desde `sff_nucleo`.
+
+`sff_calendario`, `sff_examen_cartera(_resumen)` y `sff_forecast_total` todavía se escriben, aunque tengan su consulta.
 
 ## Las sumas de comprobación
 

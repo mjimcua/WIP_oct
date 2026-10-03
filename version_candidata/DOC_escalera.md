@@ -17,6 +17,49 @@ Formalmente es el equilibrio entre sesgo y varianza. Al predecir una serie con l
 
 Por eso importa el orden: se quita primero lo que menos explica la renovación (paso 09, con las series grandes, donde la tasa se mide bien), y esa relevancia se aplica a las series pequeñas, que no tienen datos para aprenderla solas.
 
+## La regla del ruido
+
+> **Una diferencia menor que el ruido no es una diferencia. Un error del tamaño del ruido no es un fallo: es el límite.**
+
+El ruido binomial de la tasa mensual de una forecast serie con n contratos al mes y tasa p es σ = √(p(1−p)/n). Es la
+variación que tendría la tasa aunque el cliente medio no cambiara nada: puro azar de quién renueva este mes.
+
+| Contratos al mes (p = 0,64) | σ (ruido) | Error medio de una predicción perfecta (≈ 0,8 σ) | El 95 % de los meses cae en |
+|---|---|---|---|
+| 10 | ±15,2 pp | 12,1 pp | ±29,8 pp |
+| 30 (el suelo) | ±8,8 pp | 7,0 pp | ±17,2 pp |
+| 92 | ±5,0 pp | 4,0 pp | ±9,8 pp |
+| 271 | ±2,9 pp | 2,3 pp | ±5,7 pp |
+| 1.000 | ±1,5 pp | 1,2 pp | ±3,0 pp |
+| 354.000 (toda la cartera en un mes) | ±0,08 pp | 0,06 pp | ±0,16 pp |
+
+**Primera mitad: para separar.** Dos segmentos cuyas tasas difieren menos que σ no se distinguen mes a mes. Separarlos no
+aporta información y quita soporte. Es el criterio de la escalera (juntar mientras el sesgo que se añade es menor que el
+ruido que se quita) y el de los niveles generados (paso 01b: se juntan los valores que difieren menos que el ruido de una
+serie en el suelo, 8,8 pp).
+
+**Segunda mitad: para prometer.** Aunque supiéramos la tasa verdadera de una serie, el mes real caería a su alrededor
+con ese ruido. Una predicción perfecta se equivoca, de media, en torno a 0,8 σ, y solo el 68 % de los meses cae dentro de
+±σ. De ahí tres consecuencias:
+
+- **Lo que hay dentro de la banda de ruido es azar: no se puede predecir.** La expectativa realista no es caer en el
+  centro, sino que el error sea del orden de σ. Un error de ese tamaño quiere decir que se ha extraído todo lo que se podía.
+- **Un error claramente mayor que σ** indica que falta algo que sí se podía saber: una tendencia, una estacionalidad o un
+  cambio de mercado.
+- **Un error sistemáticamente menor que σ** no es mérito, es sospechoso: el modelo ha visto datos del futuro o se ha
+  ajustado al azar.
+
+Por eso el intervalo que se da a negocio nunca puede ser más estrecho que la banda de ruido de la serie. Y por eso el
+examen mide el error en unidades de ruido (`err_norm` = error / σ en `sff_series_backtest`): un |err_norm| cercano a 1 es
+acertar al límite.
+
+**La consecuencia para negocio, la más útil.** El ruido baja con la raíz del tamaño:
+- **En una serie pequeña,** casi todo el error es ruido: de 30 contratos al mes, ±8,8 pp no se pueden mejorar.
+- **En el total de la cartera,** el ruido es despreciable (±0,08 pp): todo el error que quede es del modelo (sesgo,
+  cambios de mercado).
+
+Por eso el forecast se juzga por serie frente a su ruido, y por total frente a la hoja de cálculo.
+
 ## Las pasadas y su orden
 
 Cada pasada pone a `*` (cualquier valor) una dimensión más:
@@ -73,8 +116,18 @@ Config (`current_month`, `test_months`), no del paso 02.
 1. Se usan solo los meses de entrenamiento.
 2. Cada valor se compara dentro de su celda, con el resto de mandatory iguales.
 3. Los valores con menos de 30 contratos al mes van a `residual`.
-4. Se juntan los vecinos más parecidos mientras su diferencia sea como mucho `level_merge_max_pp` (5 pp). `ordinal`:
-   solo valores contiguos, con los números comparados como números; `nominal`: cualquier par.
+4. Se juntan los vecinos más parecidos mientras su diferencia sea menor que el **ruido binomial de una serie en el suelo
+   de soporte**, 100·√(p(1−p)/30): 8,8 pp con p = 0,64. `ordinal`: solo valores contiguos, con los números comparados
+   como números; `nominal`: cualquier par.
+
+**Por qué ese umbral.** Es el mismo principio de la escalera: se junta mientras el sesgo que se añade es menor que el
+ruido que se quita. El nivel generado solo lo usan las series que suben la escalera, las de menos de 30 contratos al
+mes, y su tasa mensual tiene como mínimo ese ruido. Dos valores que difieren menos que eso no los distingue ninguna
+serie que vaya a usar la fusión. `level_merge_max_pp` fija otro valor (5 pp equivale al ruido de una serie de unos 92
+contratos al mes).
+
+**Una dimensión que termina en un solo grupo** no separa la tasa más allá de ese ruido: su `level_1` es constante y el
+paso 09 no le da pasada.
 
 **En la escalera:** una columna `X` es el nivel más fino de su familia cuando existe `X_level_N`, así que se colapsa
 primero `tr_term` y después `tr_term_level_1` (la misma regla de familias que `tr_product_level_2` → `tr_product_level_1`).
@@ -82,7 +135,7 @@ primero `tr_term` y después `tr_term_level_1` (la misma regla de familias que `
 **El JSON:**
 - La primera ejecución escribe los grupos en `levels_path` (por defecto `salida/sff_levels.json`).
 - Las siguientes lo reutilizan, así que los ids de las forecast series no cambian de un mes a otro.
-- Para regenerarlos, se borra el fichero.
+- Se regeneran si se borra el fichero o si cambia el tipo o el umbral.
 - Un valor nuevo que el fichero no conoce va a `residual`, con un aviso.
 
 ## En el forecast
