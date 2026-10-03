@@ -68,7 +68,7 @@ def production_configuration() -> Config:
         business_mandatory_dims=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3",
                                  "tr_product_level_1", "tr_product_level_2", "tr_purchase_type", "tr_renewal_type",
                                  "tr_term", "tr_band", "tr_master_partner_code"],
-        # term and band keep their raw value; step 01b adds tr_term_level_1 / tr_band_level_1 (their values
+        # term and band keep their raw value; step 01 adds tr_term_level_1 / tr_band_level_1 (their values
         # grouped by the renewal rate). The groups are kept in salida/sff_levels.json
         leveled_dims={"tr_term": "ordinal", "tr_band": "ordinal"},
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",

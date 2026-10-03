@@ -51,7 +51,7 @@ FROM {core} WHERE origen_fila = 'raw' AND s00_vencen_unidades > s02_vencen_unida
 GROUP BY {period}, s02_rol
 UNION ALL
 SELECT {period}, s02_rol, origen_fila, COUNT(*), COUNT(DISTINCT s03_fs_id),
-       SUM(fin_vence_unidades), SUM(fin_vence_usd), SUM(s17_esperado_usd)
+       SUM(forecast_to_renew_units), SUM(forecast_to_renew_USD), SUM(s17_esperado_usd)
 FROM {core} WHERE origen_fila IN ('proyectada', 'simulada') GROUP BY {period}, s02_rol, origen_fila
 ORDER BY mes, origen;"""
 
@@ -90,13 +90,13 @@ def forecast_total_query(configuration) -> str:
     # time_series row of a month not closed yet (its result is replaced by its projection)
     without_money = "origen_fila NOT IN ('hueco', 'ts_sin_resultado')"
     return f"""-- step 20 · the total per year and origin (sff_forecast_total)
-SELECT fin_ano AS ano, fin_origen AS origen, SUM(fin_vence_usd) AS usd_vence, SUM(fin_renovado_usd) AS usd_renovado
-FROM {core} WHERE fin_ano >= {first_year} AND {without_money}
-GROUP BY fin_ano, fin_origen
+SELECT forecast_year AS ano, forecast_pipeline_source AS origen, SUM(forecast_to_renew_USD) AS usd_vence, SUM(forecast_renewed_USD) AS usd_renovado
+FROM {core} WHERE forecast_year >= {first_year} AND {without_money}
+GROUP BY forecast_year, forecast_pipeline_source
 UNION ALL
-SELECT fin_ano, 'TOTAL', SUM(fin_vence_usd), SUM(fin_renovado_usd)
-FROM {core} WHERE fin_ano >= {first_year} AND {without_money}
-GROUP BY fin_ano
+SELECT forecast_year, 'TOTAL', SUM(forecast_to_renew_USD), SUM(forecast_renewed_USD)
+FROM {core} WHERE forecast_year >= {first_year} AND {without_money}
+GROUP BY forecast_year
 ORDER BY ano, origen;"""
 
 

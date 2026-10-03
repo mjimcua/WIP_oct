@@ -30,19 +30,19 @@ def test_the_core() -> None:
                                           "ts_proyectado", "ts_reentrada"},
           "the origins of the rows: original and synthetic, of both universes")
     total = results["forecast_total"]
-    renewed_2026 = core.loc[core["fin_ano"] == 2026, "fin_renovado_usd"].sum()
-    pipeline_2027 = core.loc[core["fin_ano"] == 2027, "fin_vence_usd"].sum()
+    renewed_2026 = core.loc[core["forecast_year"] == 2026, "forecast_renewed_USD"].sum()
+    pipeline_2027 = core.loc[core["forecast_year"] == 2027, "forecast_to_renew_USD"].sum()
     check(abs(renewed_2026 - total.loc[(total["ano"] == 2026) & (total["origen"] == "TOTAL"), "usd_renovado"].item()) < 0.01
           and abs(pipeline_2027 - total.loc[(total["ano"] == 2027) & (total["origen"] == "TOTAL"), "usd_vence"].item()) < 0.01,
           "Q1 (renewed 2026) and Q2 (pipeline 2027) are a SUM of the core: equal to sff_forecast_total")
-    real_2026 = core[(core["fin_ano"] == 2026) & (core["fin_estado"] == "real")]["fin_renovado_usd"].sum()
-    expected_2026 = core[(core["fin_ano"] == 2026) & (core["fin_estado"] == "previsto")]["fin_renovado_usd"].sum()
-    check(abs(real_2026 + expected_2026 - renewed_2026) < 0.01, "2026 splits into real (done) + previsto (to renew)")
+    real_2026 = core[(core["forecast_year"] == 2026) & (core["forecast_status"] == "actual")]["forecast_renewed_USD"].sum()
+    expected_2026 = core[(core["forecast_year"] == 2026) & (core["forecast_status"] == "forecast")]["forecast_renewed_USD"].sum()
+    check(abs(real_2026 + expected_2026 - renewed_2026) < 0.01, "2026 splits into actual (done) + forecast (to renew)")
     gaps = core[core["origen_fila"] == "hueco"]
     check(len(gaps) > 0 and (gaps["s00_vencen_unidades"] == 0).all() and gaps["s03_fs_id"].isin(dimension["s03_fs_id"]).all(),
           "a gap row has every measure at 0 and its forecast series is in the dimension")
     raw = configuration.read_raw()
-    check(abs(core.loc[core["fin_universo"] == "pipeline", "s00_vencen_usd"].sum()
+    check(abs(core.loc[core["forecast_universe"] == "pipeline", "s00_vencen_usd"].sum()
               - raw.loc[raw["flag_time_series"] != 1, "total_tr_usd"].sum()) < 0.01,
           "Σ USD due in the core = Σ in the extract without the time_series universe (it is simulated apart, step 20)")
     check(dimension["s03_fs_id"].is_unique and set(dimension["s03_fs_id"]) == set(core["s03_fs_id"].dropna())

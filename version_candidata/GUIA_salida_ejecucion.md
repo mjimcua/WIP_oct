@@ -15,7 +15,7 @@ columnas) con `period` convertido a mes. No escribe ninguna tabla.
 **Acción 1** — "the Config declares 32 columns in 8 roles". La Config conoce 32 columnas repartidas en 8 roles con columnas
 (`extra_revalorizacion` no cuenta porque está vacío). El raw tiene 28; la diferencia son 4:
 - **2 seguras:** `tr_term_level_1` y `tr_band_level_1`. La Config las declara desde que se construye, pero no existen hasta
-  el paso 01b.
+  el paso 01.
 - **2 más:** lo más probable es que sean columnas de `ignore_cols` que no vienen en el extracto (la comprobación 4 permite
   que las ignoradas falten). Se confirma con `[c for c in configuration.column_roles() if c not in raw.columns]`.
 
@@ -29,7 +29,7 @@ con él.
 | 1 | el raw tiene filas | una consulta que devuelve 0 filas no debe llegar a producir un forecast vacío "correcto" | 1.023.291 |
 | 2 | ningún nombre de columna se repite | pandas admite columnas duplicadas, y entonces `raw["x"]` devuelve dos columnas y los cálculos fallan más adelante de forma confusa | ok |
 | 3 | cada columna del raw tiene un rol en la Config | una columna sin rol no se sabe si se suma, si abre la serie o si se ignora; obliga a decidir qué es cada columna | 28 de 28 |
-| 4 | cada columna declarada está en el raw | una dimensión que falta rompería los ids de las forecast series; se exceptúan las ignoradas y las generadas en el 01b | ok |
+| 4 | cada columna declarada está en el raw | una dimensión que falta rompería los ids de las forecast series; se exceptúan las ignoradas y las generadas en el paso 01 | ok |
 | 5 | cada fila tiene mes | una fila sin `period` no puede entrar en ningún mes del calendario | ok |
 
 ### Comprobaciones 6-10: el calendario
@@ -61,7 +61,7 @@ pipeline futura (de 2026-09 a 2027-12).
 | extra_revalorizacion | ninguna | abriría la celda de precio (el uplift), no la tasa |
 | formula_input | `discount`, `sku` | no son dimensiones: entradas de cálculo (el descuento exacto para los tramos del uplift, el SKU) |
 | ignore | `dummy_field`, `_filter2` | se leen y no se usan |
-| niveles generados (01b) | `tr_term` → `tr_term_level_1` (nominal); `tr_band` → `tr_band_level_1` (ordinal) | la columna conserva su valor raw; el 01b añade su nivel agrupado |
+| niveles generados (01) | `tr_term` → `tr_term_level_1` (nominal); `tr_band` → `tr_band_level_1` (ordinal) | la columna conserva su valor raw; el paso 01 añade su nivel agrupado |
 
 ### La tabla del calendario
 
@@ -86,7 +86,15 @@ Las tres suman 1.023.291: cada fila del raw tiene exactamente un rol. Los meses 
 
 ---
 
-## Separación del universo time_series (`[00b]` SPLIT)
+## Paso 01, acción 1 · Separación del universo time_series
+
+> **Desde la versión sin pasos con letra (3-oct-2026)** la separación, la validación de valores y los niveles generados
+> son un único paso 01 (`step_01_values_and_levels.py`), con una cabecera, las comprobaciones numeradas seguidas y un
+> solo recuento. Las secciones de abajo describen la ejecución anterior; en la salida nueva la numeración es:
+> comprobación 1 = la marca time_series es 0 / 1 (antes era una de las de señales); 2-3 = la separación (antes `[00b]`
+> 1-2); 4-20 = los valores (antes 1-19, sin la marca time_series); y detrás, si hay `leveled_dims`, los niveles (antes
+> `[01b]` 1-3). Acciones: 1 separación · 2-6 valores · 7-11 niveles · 12 recuento · 13 dinero de los meses cerrados ·
+> 14 evidencia de los niveles y tabla de roles.
 
 **Qué hace.** Saca del raw las filas del universo time_series (retail a suscripción, `flag_time_series = 1`) antes del
 paso 01: solo llevan la región y el resultado, y el paso 20 las proyecta al final, aparte.
@@ -106,7 +114,7 @@ consulta o el valor de `flag_time_series` (que venga como 1 y no como `True`, te
 
 ---
 
-## Paso 01 · Validar los valores
+## Paso 01, acciones 2-6 · Validar los valores
 
 **Qué hace.** Comprueba que los valores del raw se pueden usar para calcular: dinero sin nulos ni negativos, renovaciones
 coherentes con lo que vencía, dimensiones nunca vacías, señales 0/1 y descuento como proporción. No cambia el raw ni
@@ -203,7 +211,7 @@ forecast: la tasa en unidades (pasos 08-14) y el uplift de precio (pasos 15-16).
 
 ---
 
-## Paso 01b · Dimensiones con un nivel generado
+## Paso 01, acciones 7-11 y 14 · Dimensiones con un nivel generado
 
 **Qué hace.** Da a cada dimensión de `leveled_dims` su nivel agrupado, `<columna>_level_1`: sus valores agrupados por la
 tasa estandarizada de los meses de entrenamiento. Lo guarda en un JSON que las ejecuciones siguientes reutilizan, para que
@@ -249,7 +257,7 @@ Las unidades de cada dimensión suman lo mismo (14.630.701): son todas las de en
   interpretación, `ordinal` es correcto.
 - **La tasa de cada año** de cada grupo: en esta ejecución no salía por pantalla. Desde la próxima, sí (ver más abajo).
 
-### Lo que cambia en el paso 01b desde la próxima ejecución
+### Lo que cambia en los niveles generados desde la próxima ejecución
 
 **El umbral de fusión ya no es un 5 pp fijo.** Dos valores vecinos se juntan mientras sus tasas estandarizadas difieren
 menos que el **ruido binomial de una serie en el suelo de soporte**: 100·√(p(1−p)/30). Con p = 0,64 son **8,8 pp**.
@@ -282,7 +290,7 @@ error del tamaño del ruido no es un fallo: es el límite"), explicada en `DOC_e
 ### La tabla de roles con los niveles generados
 
 La misma tabla del paso 00, ahora con el rol mandatory en 11 columnas: `tr_term`, `tr_term_level_1`, `tr_band` y
-`tr_band_level_1`, cada nivel generado justo detrás de su columna. La fila `niveles generados (01b)` marca las dos como
+`tr_band_level_1`, cada nivel generado justo detrás de su columna. La fila `niveles generados (01)` marca las dos como
 `generado`.
 
 ---

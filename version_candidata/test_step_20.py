@@ -64,11 +64,12 @@ def test_the_step() -> None:
     configuration = synthetic_with()
     results = {}
     console = console_of(lambda: results.update(run(configuration)))
-    check("2 checks: 2 ok" in console.split("[00b]")[-1].split("STEP 01")[0] and "6 checks: 6 ok" in console.split("STEP 20")[1],
-          "the split and the checks of step 20 pass")
+    check("every time_series row has every region level" in console.split("STEP 01 ·")[1].split("STEP 02 ")[0]
+          and "6 checks: 6 ok" in console.split("STEP 20")[1],
+          "the separation (step 01) and the checks of step 20 pass")
     time_series_rows = results["time_series_rows"]
     check(len(time_series_rows) == 48 and not (results["fine_table"]["flag_time_series"] == 1).any(),
-          "the flagged rows leave the raw after step 00: none reaches the fine table")
+          "the flagged rows leave the raw in step 01: none reaches the fine table")
     table, total = results["time_series"], results["forecast_total"]
     check(set(table["origen"]) == {"ts_real", "ts_proyectado", "ts_reentrada"}, "the three origins of the universe")
     projected_months = set(table.loc[table["origen"] == "ts_proyectado", "period"].astype(str))

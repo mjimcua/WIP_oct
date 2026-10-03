@@ -32,29 +32,13 @@ El extracto tiene **843 filas × 18 columnas**, de 2023-01 a 2026-12. Cada colum
 
 | paso | nombre | comprobaciones | ok | avisos | fallos | avisos_detalle |
 |---|---|---|---|---|---|---|
-| 00 | VALIDATE RAW | 10 | 10 | 0 | 0 |  |
-| 00b | SPLIT | 2 | 2 | 0 | 0 |  |
-| 01 | VALIDATE VALUES | 20 | 20 | 0 | 0 |  |
-| 02 | APPLY CALENDAR | 10 | 10 | 0 | 0 |  |
-| 03 | FINE TABLE | 5 | 5 | 0 | 0 |  |
-| 04 | FORECAST UNITS | 5 | 5 | 0 | 0 |  |
-| 05 | LOOKUPS | 5 | 5 | 0 | 0 |  |
-| 06 | SERIES AND ROUTES | 4 | 4 | 0 | 0 |  |
-| 07 | SUPPORT BOUND | 2 | 2 | 0 | 0 |  |
-| 08 | RATE SERIES | 6 | 6 | 0 | 0 |  |
-| 09 | DIMENSIONS | 6 | 6 | 0 | 0 |  |
-| 10 | LADDER GROUPS | 9 | 9 | 0 | 0 |  |
-| 11 | LADDER | 6 | 6 | 0 | 0 |  |
-| 12 | POOL SERIES | 5 | 5 | 0 | 0 |  |
-| 13 | DYNAMICS OF THE RATE | 4 | 4 | 0 | 0 |  |
-| 14 | BACKTEST OF THE RATE | 11 | 11 | 0 | 0 |  |
-| 15 | UPLIFT | 5 | 5 | 0 | 0 |  |
-| 16 | BACKTEST OF THE UPLIFT | 3 | 3 | 0 | 0 |  |
 | 17 | FORECAST | 8 | 8 | 0 | 0 |  |
 | 19 | EXAM OF EVERY FORECAST SERIES | 8 | 8 | 0 | 0 |  |
 | 20 | TIME SERIES UNIVERSE AND TOTAL | 6 | 6 | 0 | 0 |  |
+| 21 | THE ROWS THE FRAMEWORK ADDS OR WIPES | 1 | 1 | 0 | 0 |  |
 | AUD | AUDIT TABLES | 18 | 18 | 0 | 0 |  |
 | NU | CORE TABLE | 10 | 10 | 0 | 0 |  |
+| 22 | ADAPTATION TO POWER BI | 3 | 3 | 0 | 0 |  |
 | 18 | VALIDATION | 7 | 7 | 0 | 0 |  |
 
 **Lo que se corrigió o completó en el raw:**
@@ -65,11 +49,36 @@ El extracto tiene **843 filas × 18 columnas**, de 2023-01 a 2026-12. Cada colum
 - Descuento: tramo derivado del descuento exacto con los cortes [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100] %; **4.5%** de las filas sin dato (tramo `sin_dato`).
 - Grano: 795 filas = 795 filas finas distintas (unidad + valores de revalorización + descuento exacto); el dinero se conserva al agregar a 699 forecast units.
 
-## 2 · Huecos rellenados
+## 2 · Las filas que añade (y borra) el framework
 
-Un hueco es un mes sin vencimientos DENTRO de la historia de una serie estimable. Un mes sin vencimientos no dice nada de la tasa: su tasa queda **nula, nunca 0 %**, y el mes aparece como fila explícita con medidas a 0 para que la historia de la serie esté completa y las sumas sigan cuadrando.
+El forecast no usa el extracto tal cual. Añade o borra filas de cuatro tipos, cada uno por un motivo:
 
-- Huecos añadidos: **11** en **1 series**, el 1.7% de los meses de historia.
+- **hueco** (paso 08): una forecast unit sin nada que vencer, añadida DENTRO de la historia de una serie estimable para que su serie mensual no tenga agujeros (las técnicas leen meses consecutivos: una tendencia, una estación, una media móvil). Todas sus medidas son 0 y su tasa queda **nula, nunca 0 %**: añade un mes, no dinero.
+- **resultado_adelantado_borrado** (paso 02): una renovación ya registrada desde el mes en curso; el mes no ha terminado, y el forecast la predice.
+- **pipeline_parcial_borrada** (paso 02): la pipeline de las licencias de 1 año que vencen 12 meses después del mes en curso o más tarde. La generan las ventas y renovaciones desde el mes en curso, que solo han empezado (el mes va por la mitad y los siguientes no han empezado): está a medio crear. Si se dejara, el forecast de esos meses se calcularía sobre una pipeline a medias; el paso 17 la reconstruye entera.
+- **proyectada** y **simulada** (paso 17): las renovaciones esperadas de las licencias de 1 año que vencen en la ventana de simulación, y la captación simulada; vencen 12 meses después y sustituyen a la pipeline borrada.
+
+**Por origen:**
+
+| origen | meses | filas | unidades | usd | esperado_usd |
+|---|---|---|---|---|---|
+| hueco | 2023-03..2026-07 | 11 | 0 | 0 |  |
+| resultado_adelantado_borrado | 2026-09..2026-09 | 14 | 328 | 10,079 |  |
+| proyectada | 2027-09..2027-12 | 66 | 4,408 | 133,267 | 96,099 |
+
+
+**Mes a mes, lo borrado y lo creado** (las unidades y el dinero que vencen; `esperado_usd`: lo que el forecast espera renovar de las filas creadas):
+
+| mes | rol | origen | filas | series | unidades | usd | esperado_usd |
+|---|---|---|---|---|---|---|---|
+| 2026-09 | proyeccion | resultado_adelantado_borrado | 14 | 12 | 328 | 10,079 |  |
+| 2027-09 | proyeccion | proyectada | 16 | 14 | 1,094 | 33,057 | 23,834 |
+| 2027-10 | proyeccion | proyectada | 17 | 15 | 1,114 | 33,671 | 24,294 |
+| 2027-11 | proyeccion | proyectada | 16 | 14 | 1,081 | 32,684 | 23,376 |
+| 2027-12 | proyeccion | proyectada | 17 | 15 | 1,120 | 33,856 | 24,595 |
+
+
+**Los huecos:** 11 en 1 series, el 1.7% de los meses de historia. Las series con más huecos:
 
 | fs_id | meses_historia | huecos | n_propio | usd_por_predecir |
 |---|---|---|---|---|
@@ -222,16 +231,16 @@ Los pools juzgados cubren el **99%** del dinero por predecir; el resto toma el r
 
 **La cartera en el examen, serie a serie: el framework frente a la serie sola (raw) y a la hoja de cálculo** (paso 19; cada serie predicha como la predice el forecast, con solo lo que se sabía h meses antes; raw: la serie con su propia historia, sin escalera; la hoja: la tasa de los últimos 12 meses por grano × la pipeline real; error_total: de la suma de la cartera; wape_series: serie a serie, sin compensaciones):
 
-| metodo | h | error_total_medio | sesgo_total_medio | wape_series | en_intervalo |
-|---|---|---|---|---|---|
-| framework | 1 | 0.021 | 0.021 | 0.042 | 0.854 |
-| raw | 1 | 0.022 | 0.022 | 0.044 | 0.805 |
-| hoja_mandatory | 1 | 0.025 | 0.019 | 0.051 |  |
-| hoja_global | 1 | 0.033 | 0.033 | 0.208 |  |
-| raw | 6 | 0.022 | 0.011 | 0.040 | 0.878 |
-| framework | 6 | 0.022 | 0.011 | 0.038 | 0.927 |
-| hoja_mandatory | 6 | 0.029 | 0.029 | 0.056 |  |
-| hoja_global | 6 | 0.054 | 0.054 | 0.209 |  |
+| metodo | h | error_total_medio | sesgo_total_medio | wape_series | error_vs_ruido | en_intervalo |
+|---|---|---|---|---|---|---|
+| framework | 1 | 0.021 | 0.021 | 0.042 | 1.198 | 0.854 |
+| raw | 1 | 0.022 | 0.022 | 0.044 | 1.449 | 0.805 |
+| hoja_mandatory | 1 | 0.025 | 0.019 | 0.051 | 2.125 |  |
+| hoja_global | 1 | 0.033 | 0.033 | 0.208 | 1.875 |  |
+| raw | 6 | 0.022 | 0.011 | 0.040 | 1.285 | 0.878 |
+| framework | 6 | 0.022 | 0.011 | 0.038 | 1.124 | 0.927 |
+| hoja_mandatory | 6 | 0.029 | 0.029 | 0.056 | 2.171 |  |
+| hoja_global | 6 | 0.054 | 0.054 | 0.209 | 1.933 |  |
 
 | mes | h | renovadas_reales | raw_pred | raw_error_total | framework_pred | framework_error_total | hoja_global_pred | hoja_global_error_total | hoja_mandatory_pred | hoja_mandatory_error_total |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -241,6 +250,26 @@ Los pools juzgados cubren el **99%** del dinero por predecir; el resto toma el r
 | 2026-07 | 6 | 1,059.000 | 1,090.387 | 0.030 | 1,091.413 | 0.031 | 1,143.632 | 0.080 | 1,121.604 | 0.059 |
 | 2026-08 | 1 | 1,109.000 | 1,126.655 | 0.016 | 1,125.893 | 0.015 | 1,143.761 | 0.031 | 1,126.293 | 0.016 |
 | 2026-08 | 6 | 1,109.000 | 1,130.804 | 0.020 | 1,130.650 | 0.020 | 1,169.878 | 0.055 | 1,140.085 | 0.028 |
+
+
+**El error frente al ruido** (la regla del ruido: una diferencia menor que el ruido no es una diferencia; un error del tamaño del ruido no es un fallo, es el límite). `ruido_pp`: lo que se equivocaría una predicción perfecta, √(p(1−p)/n). `error_vs_ruido` ≈ 1: al límite; claramente mayor que 1: falta algo que se podía saber. `parte_del_error_que_es_ruido`: la parte del error que ninguna predicción puede quitar. Por tamaño de la serie:
+
+| tamano | metodo | predicciones | error_pp | ruido_pp | error_vs_ruido | parte_del_error_que_es_ruido |
+|---|---|---|---|---|---|---|
+| < 30 al mes | framework | 54 | 17.95 | 15.47 | 1.16 | 74% |
+| < 30 al mes | raw | 54 | 19.84 | 14.60 | 1.36 | 54% |
+| 30-270 al mes | framework | 10 | 5.79 | 5.28 | 1.10 | 83% |
+| 30-270 al mes | raw | 10 | 7.05 | 5.26 | 1.34 | 56% |
+| ≥ 271 al mes | framework | 18 | 2.95 | 2.27 | 1.30 | 59% |
+| ≥ 271 al mes | raw | 18 | 2.95 | 2.27 | 1.30 | 59% |
+
+
+Y el **total de la cartera** en cada mes de examen, con el mismo cálculo: al juntar todo el volumen, el ruido baja con la raíz del tamaño, y lo que queda por encima del ruido es error del modelo:
+
+| metodo | error_pp | ruido_pp | error_vs_ruido |
+|---|---|---|---|
+| framework | 1.709 | 1.086 | 1.574 |
+| raw | 1.721 | 1.083 | 1.589 |
 
 **Cuánto acertamos, forecast serie a forecast serie, y cuánto mejora frente a la serie sola** (paso 19: en cada mes de examen y horizonte, el framework —su composición con credibilidad— y la serie sola con su propia historia (raw), sobre las mismas filas y su propia pipeline; cada predicción con su intervalo, construido como la banda del forecast). Cruzado por el tipo de serie: volatilidad (φ de su propia tasa), tendencia y estacionalidad:
 
@@ -317,7 +346,7 @@ Cada fila futura: **USD que vence × tasa de su serie × uplift de su celda**. L
 | celda_mandatory | 6 | 4,782 | 3,686 |
 | pool | 126 | 316,466 | 225,679 |
 
-**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `fin_ano` y `fin_origen`, comprobado en el núcleo: en Power BI, SUM(fin_renovado_usd) y SUM(fin_vence_usd)). Orígenes: renovaciones ya contabilizadas y esperadas de la pipeline real, reentradas y captación del horizonte extendido, y el universo time_series de retail a suscripción (ts_real y ts_proyectado cuentan como revenue del año, sin tasa; ts_reentrada es pipeline del año siguiente: comprado con descuento, renueva al 100 % con la tasa de su región). Total 2026 = renovaciones de la pipeline + ts_real + ts_proyectado · Total 2027 = forecast extendido + ts_reentrada. usd_vence: pipeline; usd_renovado: renovaciones o revenue:
+**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `forecast_year` y `forecast_pipeline_source`, comprobado en el núcleo: en Power BI, SUM(forecast_renewed_USD) y SUM(forecast_to_renew_USD)). Orígenes: renovaciones ya contabilizadas y esperadas de la pipeline real, reentradas y captación del horizonte extendido, y el universo time_series de retail a suscripción (ts_real y ts_proyectado cuentan como revenue del año, sin tasa; ts_reentrada es pipeline del año siguiente: comprado con descuento, renueva al 100 % con la tasa de su región). Total 2026 = renovaciones de la pipeline + ts_real + ts_proyectado · Total 2027 = forecast extendido + ts_reentrada. usd_vence: pipeline; usd_renovado: renovaciones o revenue:
 
 | ano | origen | unidades_vencen | usd_vence | unidades_renovadas | usd_renovado |
 |---|---|---|---|---|---|

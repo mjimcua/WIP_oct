@@ -40,7 +40,7 @@ Una fila por registro: las filas del extracto, los huecos (meses sin vencimiento
 | Ids | `s03_fs_id`, `s03_fu_id`, `s03_uplift_cell_id` | la forecast serie (clave de la dimensión), la unidad y la celda de precio |
 | Unidad | `s04_filas_finas`, `s07_moe_pp_max` | el detalle de la forecast unit |
 | Forecast | `s17_*`, `s17_confidence` | tasa, banda, uplift, esperado y confianza de cada fila futura |
-| Final | `fin_*` | lo que se suma para responder: renovado real y previsto, pipeline, por año y origen |
+| Final | `forecast_*` | lo que se suma para responder: renovado real y previsto, pipeline, por año y origen |
 
 ## La dimensión: `sff_forecast_series`
 
@@ -84,10 +84,19 @@ Una fila por forecast serie. Es la tabla que se filtra en Power BI.
 | WAPE framework | `DIVIDE(SUM(sff_forecast_series[s19_exam_abs_err_units]), SUM(sff_forecast_series[s19_exam_real_units]))` |
 | WAPE raw | `DIVIDE(SUM(sff_forecast_series[s19_raw_abs_err_units]), SUM(sff_forecast_series[s19_raw_real_units]))` |
 | Sesgo del total (framework) | `DIVIDE(SUM(sff_forecast_series[s19_exam_pred_units]), SUM(sff_forecast_series[s19_exam_real_units])) - 1` |
-| Renovado (real + previsto) | `SUM(sff_nucleo[fin_renovado_usd])`, segmentado por `fin_ano`, `fin_estado`, `fin_origen` |
+| Renovado (real + previsto) | `SUM(sff_nucleo[forecast_renewed_USD])`, segmentado por `forecast_year`, `forecast_status`, `forecast_pipeline_source` |
 | Tasa de renovación (meses cerrados) | `DIVIDE(SUM(sff_nucleo[s02_renovadas_unidades]), SUM(sff_nucleo[s00_vencen_unidades]))` con `s02_rol` en entrenamiento y examen |
 
 Para cruzar el acierto con la dinámica se segmenta por `s13_series_*` (por ejemplo, volatilidad alta frente a baja). El informe trae esa tabla en el capítulo 5.
+
+## Las tablas auxiliares de Power BI (paso 22)
+
+El paso 22 construye en Python el contexto que el informe necesita (nombres de negocio, orden, bloques), para que
+Power BI solo relacione y sume, sin lógica dentro del informe.
+
+| Tabla | Una fila por | Relación | Columnas |
+|---|---|---|---|
+| `sff_forecast_pipeline_source` | origen de la pipeline | `[forecast_pipeline_source]` 1 → n `sff_nucleo[forecast_pipeline_source]` | `source_label`, `source_block`, `source_order` (ordenar la etiqueta por esta columna) |
 
 ## Las satélites
 
@@ -107,7 +116,7 @@ Para cruzar el acierto con la dinámica se segmenta por `s13_series_*` (por ejem
 | `sff_series_dynamics` | forecast serie | `fs_id` | φ, tendencia y estacionalidad de la propia serie, y si son medibles |
 | `sff_series_backtest` | forecast serie × mes de examen × horizonte × técnica | `fs_id` | cada técnica aplicada a la forecast serie, con su intervalo |
 | `sff_series_technique_summary` | forecast serie × tramo × técnica | `fs_id` | error medio, sesgo, WAPE, ranking en la serie, elegida, mejor para la serie |
-| `sff_dimension_levels` | dimensión × grupo | — | los grupos generados de `level_1` (paso 01b), con su tasa estandarizada por año |
+| `sff_dimension_levels` | dimensión × grupo | — | los grupos generados de `level_1` (paso 01), con su tasa estandarizada por año |
 | `sff_dimension_level_values` | dimensión × valor | — | cada valor de una dimensión con nivel generado: su grupo, soporte, tasa, ruido y años |
 
 ## Los informes agregados no son tablas
@@ -154,7 +163,7 @@ que lo calcula imprime esa consulta (`report_queries.py`), y los tests comprueba
 ## Cómo auditar una forecast serie
 
 1. **En la dimensión:** su ruta, su soporte propio y el de su composición, su nivel de riesgo, su confianza, y el examen raw frente a framework.
-2. **En el núcleo:** sus filas, su renovado previsto y su banda (`s17_*`, `fin_*`).
+2. **En el núcleo:** sus filas, su renovado previsto y su banda (`s17_*`, `forecast_*`).
 3. **Cómo se formó su composición:** `sff_ladder_steps` (pasada a pasada) y `sff_ladder_merges` (si cada fusión mejoró).
 4. **Su composición** (`s10_stage3_id` → `sff_composition` y `sff_composition_members`): quién entra en su tasa y quién la usa.
 5. **Las técnicas** (`sff_composition_techniques`, `sff_composition_forecast_all`): las probadas, las descartadas y por qué, y lo que habría dado cada una.

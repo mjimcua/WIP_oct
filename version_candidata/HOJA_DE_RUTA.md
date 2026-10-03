@@ -9,7 +9,7 @@ solo gana los parámetros que el paso necesita.
 | Paso | Qué hace | Referencia en `WIP_oct` | Estado |
 |---|---|---|---|
 | 00 | Estructura: columnas (filas, repetidas, rol, presentes) y meses (se leen, el calendario cabe) | `config.validate_column_contract`, `raw_data_validation.validate_raw` [1-2] | **hecho** |
-| 01 | Contenido: dinero, dimensiones, flags 0/1, descuento en [0,1], avisos | `raw_data_validation.validate_raw` [3-5] | **hecho** |
+| 01 | Contenido, en un solo paso (`step_01_values_and_levels.py`): separa el universo time_series (sus filas solo llevan región y resultado; van al paso 20), valida los valores del universo de renovaciones (dinero, dimensiones, señales 0/1, descuento en [0,1], avisos) y genera `<columna>_level_1` de las dimensiones de `leveled_dims` (JSON reutilizable) · escribe `sff_dimension_levels`, `sff_dimension_level_values` | `raw_data_validation.validate_raw` [3-5] | **hecho** |
 | 02 | Aplicar el calendario: rol y mes en curso generados, `s0_*`, limpiar la proyección, renovación nula en mes cerrado → 0 (contada) · pipeline de licencias de 1 año vendidas o renovadas desde el mes en curso (vence desde mes en curso + 12) borrada: aún no se conoce, se proyecta (el raw queda en s0_vencen_*) · escribe `sff_calendario` | `apply_current_month_doctrine` | **hecho** |
 | 03 | Tabla fina: tramo de descuento derivado del descuento exacto (cortes de la Config, nulo → sin_dato), fs_id, fu_id, uplift_cell_id (con el tramo), fila_key (con el descuento exacto) y sus claves, grano comprobado con la SQL que lo reproduce · escribe `sff_fact_fine` | `build_fine_table` | **hecho** |
 | 04 | Forecast units: una fila por serie × mes, medidas sumadas, dinero conservado · escribe `sff_fact_fu` | `aggregate_to_forecast_units` | **hecho** |
@@ -30,7 +30,8 @@ solo gana los parámetros que el paso necesita.
 | 19 | Examen de la cartera serie a serie (como predice el forecast, solo con lo sabido h meses antes) frente a la hoja de cálculo de negocio (tasa de los últimos N meses por grano) · escribe `sff_examen_cartera`, `sff_examen_cartera_resumen`. Sustituye al 'total' del paso 14, que sumaba pools solapados | `analysis_baseline` (reorientado) | **hecho** |
 | 20 | Universo time_series (retail a suscripción): sus filas (los niveles regionales y el resultado) se separan tras el paso 00; se proyecta al nivel regional más fino (país) y la tasa de la reentrada sube país → subregión → región → global; se simula lo que queda del año (unidades del mismo mes del año anterior × nivel de los últimos 3 meses; valor = unidades × valor medio de 12 meses; reparto por cuota si falta historia), cuenta como revenue del año; lo proyectado vence al año siguiente como pipeline (valor / (1 − 0,4), tasa de su región en la pipeline real). Total por año y origen · escribe `sff_time_series`, `sff_forecast_total` | nuevo | **hecho** |
 | 20 | PASO FINAL · universo time_series (retail a suscripción) y total del forecast: ts_real (meses cerrados del año), ts_proyectado (mismo mes del año anterior × nivel de los últimos 3 meses, al valor medio de la región; si falta, el total repartido por cuota), ts_reentrada en 2027 (valor / (1 − 0,4) × tasa de la región); total por año y origen · escribe `sff_time_series`, `sff_forecast_total`. Fuente: `read_time_series()` o las filas con flag del raw | nuevo (encargo del 30-sep) | **hecho** |
-| NU | Tabla núcleo: UNA tabla con TODOS los registros originales (pipeline y universo time_series) y todos los sintéticos (huecos, horizonte extendido, ts_proyectado, ts_reentrada), sin claves hash, columnas con el prefijo del paso que las crea, y el bloque final `fin_*` (universo, origen, estado real/previsto, año, pipeline y renovado) igual para todas las filas: las preguntas de negocio son SUMAS del núcleo, y `sff_forecast_total` se comprueba igual a esa suma. Se construye tras el paso 20 · escribe `sff_nucleo`, `sff_nucleo_leyenda` | `nucleo.run_core_table` | **hecho (00-20)** |
+| NU | Tabla núcleo: UNA tabla con TODOS los registros originales (pipeline y universo time_series) y todos los sintéticos (huecos, horizonte extendido, ts_proyectado, ts_reentrada), sin claves hash, columnas con el prefijo del paso que las crea, y el bloque final `forecast_*` (universo, origen, estado real/previsto, año, pipeline y renovado) igual para todas las filas: las preguntas de negocio son SUMAS del núcleo, y `sff_forecast_total` se comprueba igual a esa suma. Se construye tras el paso 20 · escribe `sff_nucleo`, `sff_nucleo_leyenda` | `nucleo.run_core_table` | **hecho (00-20)** |
+| 22 | Adaptación a Power BI: las tablas auxiliares del informe, para que Power BI solo relacione y sume · escribe `sff_forecast_pipeline_source` (código, etiqueta, bloque y orden de cada origen de la pipeline) | nuevo | **hecho** |
 | AUD | Tablas de auditoría, satélites del núcleo con sus sumas de comprobación: `sff_composition`, `sff_composition_techniques`, `sff_credibility`, `sff_credibility_members`, `sff_series_dynamics`, `sff_series_backtest`, `sff_series_technique_summary`, `sff_composition_forecast_all` · ver `DOC_modelo_datos.md` | nuevo | **hecho** |
 | 20 | Puente de claves para el BI | `pipeline.build_key_bridge` | bloque B |
 | 21 | Perfil del raw | `analysis_data_profile.run_raw_profile` | bloque B |
@@ -76,6 +77,11 @@ cada punto (columna "Puntos" de `PASOS_SFF.md`), no antes.
 
 PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las filas proyectadas y simuladas de la ventana y su dinero; en el paso 02 (acción 4b), cuánta pipeline de 1 año se borra por no conocerse aún; y que la pipeline de septiembre a diciembre de 2027 ya no tenga el escalón hacia abajo.
 
+## Pasos sin letra (3-oct-2026)
+- Ningún paso lleva versión con letra: la separación del universo time_series (antes `00b`/`20a`) y los niveles generados
+  (antes `01b`) forman parte del paso 01; el antiguo `02b` y el examen de cartera duplicado (`step_19_portfolio_exam.py`) se
+  retiraron.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 
@@ -113,7 +119,7 @@ prometer (intervalos, examen en unidades de ruido). Ver `DOC_escalera.md`.
    pasada en la que su grupo llega a 30; las de 271 o más predicen solas pero prestan su historia. La etapa 3 junta como
    mucho `collapse_passes` dimensiones (2). Tablas `sff_ladder_merges` (sesgo y error sola frente a junta de cada fusión) y
    `sff_composition_members` (`uses` / `lends`). Ver `DOC_escalera.md`.
-6. **Dimensiones con un nivel generado** (paso 01b, `leveled_dims={"tr_term": "ordinal", ...}`): la columna conserva su
+6. **Dimensiones con un nivel generado** (paso 01, `leveled_dims={"tr_term": "ordinal", ...}`): la columna conserva su
    nombre y su valor raw; la librería añade `<columna>_level_1` (valores agrupados por tasa estandarizada en los meses de
    entrenamiento; vecinos a menos del ruido binomial de una serie en el suelo, 8,8 pp con p = 0,64; residual bajo 30). Se genera antes del calendario; la Config la cuenta como
    mandatory desde que se construye. La primera ejecución escribe `sff_levels.json` y las siguientes lo reutilizan.
@@ -129,7 +135,7 @@ prometer (intervalos, examen en unidades de ruido). Ver `DOC_escalera.md`.
   salvo los niveles generados, que ya se fijan en su JSON.
 
 ### Por revisar con los datos reales
-- Los grupos que propone el paso 01b para term y band (tabla `sff_dimension_levels`).
+- Los grupos que propone el paso 01 para term y band (tabla `sff_dimension_levels`).
 - Cuántas fusiones mejoran y cuántas series prestan su historia (paso 10).
 - El framework frente a la serie sola y frente a la hoja (paso 19 y dimensión).
 - La duración de los pasos 10 y 19.

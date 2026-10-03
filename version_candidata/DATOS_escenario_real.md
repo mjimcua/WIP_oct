@@ -43,7 +43,7 @@ renuevan.
 | renovaciones ya registradas desde 2026-09 (resultados adelantados) | 12.009 | 145.114 | 6.018.579 |
 | pipeline de 1 año que vence desde 2027-09 (la crea una venta aún no ocurrida; la proyecta el 17) | 8.683 | 183.057 | 6.248.131 |
 
-## Los niveles generados (paso 01b, umbral fijo de 5 pp)
+## Los niveles generados (paso 01, umbral fijo de 5 pp)
 
 | Dimensión | Grupo | Unidades (entrenamiento) | Soporte mensual | rate_std |
 |---|---|---|---|---|
@@ -87,7 +87,7 @@ Son cifras orientativas: el extracto y los ids han cambiado desde entonces.
 | Qué | Tiempo | Nota |
 |---|---|---|
 | convertir `period` (paso 00) | 35 s | corregido: unos 0,1 s |
-| generar los niveles (paso 01b) | 13 s | |
+| generar los niveles (paso 01) | 13 s | |
 | escribir `sff_fact_fine` (1.023.291 × 44) | 166,5 s | subir a SQL; al reanudar con checkpoints no se repite |
 | auditoría completa (ejecución anterior) | ≈ 16 min | dinámica de 19.244 series y backtest de cada técnica en cada serie |
 
@@ -95,7 +95,7 @@ Son cifras orientativas: el extracto y los ids han cambiado desde entonces.
 
 ## Para revisar en la próxima ejecución
 
-1. **Paso 01b, el umbral de fusión derivado** (8,8 pp con p = 0,64 y suelo 30, en lugar de 5 pp):
+1. **Paso 01 (niveles), el umbral de fusión derivado** (8,8 pp con p = 0,64 y suelo 30, en lugar de 5 pp):
    - la tabla de cada valor: cuánto se separa band 1 de 2-5 y si las bands 6-7 y 10-20 se juntan con 1-5;
    - la tabla de decisiones (`within_5_pp`): qué habría cambiado con 5 pp;
    - la tasa por año de cada grupo: si son estables;

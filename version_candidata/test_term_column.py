@@ -1,6 +1,6 @@
 """
 test_term_column.py — The term of a licence when it is a leveled dimension: the column keeps its name and
-its raw value in every step (step 01b only adds term_level_1), so step 02 wipes ONLY the pipeline of the
+its raw value in every step (step 01 only adds term_level_1), so step 02 wipes ONLY the pipeline of the
 1-year licences that is not known yet and step 17 projects only them; a term_column that is not a
 mandatory dim stops when the Config is built.
 

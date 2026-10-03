@@ -555,8 +555,8 @@ def chapter_forecast(results: dict, configuration: Config, headline: list) -> st
         for _, row in total[total["origen"] == TOTAL_ORIGIN_TOTAL].iterrows():
             headline.append((f"TOTAL {int(row['ano'])} renovado + revenue time_series (pipeline {row['usd_vence']:,.0f} $)",
                              f"${row['usd_renovado']:,.0f}"))
-        lines += ["**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `fin_ano` y `fin_origen`, "
-                  "comprobado en el núcleo: en Power BI, SUM(fin_renovado_usd) y SUM(fin_vence_usd)). Orígenes: renovaciones ya contabilizadas y "
+        lines += ["**El total del forecast por año y origen** (paso 20; es la SUMA de `sff_nucleo` por `forecast_year` y `forecast_pipeline_source`, "
+                  "comprobado en el núcleo: en Power BI, SUM(forecast_renewed_USD) y SUM(forecast_to_renew_USD)). Orígenes: renovaciones ya contabilizadas y "
                   "esperadas de la pipeline real, reentradas y captación del horizonte extendido, y el universo time_series "
                   "de retail a suscripción (ts_real y ts_proyectado cuentan como revenue del año, sin tasa; ts_reentrada es "
                   "pipeline del año siguiente: comprado con descuento, renueva al 100 % con la tasa de su región). "

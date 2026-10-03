@@ -53,9 +53,8 @@ import pandas as pd
 
 from config import Config
 from step_00_validate_raw import validate_raw
-from step_01_validate_values import validate_values
+from step_01_values_and_levels import validate_values_and_build_levels
 from step_02_apply_calendar import apply_calendar
-from step_01b_dimension_levels import apply_dimension_levels
 from step_03_fine_table import build_fine_table
 from step_04_forecast_units import build_forecast_units
 from step_05_lookups import build_lookups
@@ -73,8 +72,9 @@ from step_16_uplift_backtest import backtest_uplift
 from step_17_forecast import assemble_forecast
 from step_18_validation import validate_chain
 from step_19_series_exam import examine_series
-from step_20_time_series import build_time_series_and_total, split_time_series_rows
+from step_20_time_series import build_time_series_and_total
 from step_21_new_rows import count_the_new_rows
+from step_22_power_bi import build_power_bi_tables
 from step_audit import build_audit_tables
 from step_informe import build_report
 from step_nucleo import build_core_table
@@ -136,6 +136,8 @@ def contracts(configuration: Config) -> dict:
                                       ("framework_predictions", "raw_predictions"), part="per_series")],
         "core": [TableContract("core", "fine row of the extract, gap, synthetic or time_series row", (), ("s03_fs_id",))],
         "forecast_series": [TableContract("forecast_series", "forecast series", ("s03_fs_id",), ())],
+        "power_bi": [TableContract("power_bi.pipeline_source", "forecast pipeline source", ("forecast_pipeline_source",),
+                                   ("source_label", "source_block", "source_order"), part="pipeline_source")],
     }
 
 
@@ -407,9 +409,9 @@ def sff_steps() -> list:
         configuration.logger.doc(f"[main] raw read: {len(raw):,} rows × {len(raw.columns)} columns ({time.time() - started:.1f}s)")
         return {"raw_extract": raw}
 
-    def split(context):
-        rows, time_series_rows = split_time_series_rows(context["validated_extract"], context.configuration)
-        return {"validated_renewals": rows, "time_series_rows": time_series_rows}
+    def values_and_levels(context):
+        leveled_raw, time_series_rows = validate_values_and_build_levels(context["validated_extract"], context.configuration)
+        return {"leveled_raw": leveled_raw, "time_series_rows": time_series_rows}
 
     def rate_series(context):
         rated_units, series_rate = build_rate_series(context["forecast_units"], context["series_table"], context.configuration)
@@ -481,12 +483,8 @@ def sff_steps() -> list:
         Step("read_raw", "--", (), ("raw_extract",), read_raw, module="config"),
         Step("validate_raw", "00", ("raw_extract",), ("validated_extract",),
              lambda context: {"validated_extract": validate_raw(context["raw_extract"], context.configuration)}, module="step_00_validate_raw"),
-        Step("split_time_series", "20a", ("validated_extract",), ("validated_renewals", "time_series_rows"), split, module="step_20_time_series"),
-        Step("validate_values", "01", ("validated_renewals",), ("validated_raw",),
-             lambda context: {"validated_raw": validate_values(context["validated_renewals"], context.configuration)}, module="step_01_validate_values"),
-        Step("dimension_levels", "01b", ("validated_raw",), ("leveled_raw",),
-             lambda context: {"leveled_raw": apply_dimension_levels(context["validated_raw"], context.configuration)},
-             module="step_01b_dimension_levels"),
+        Step("values_and_levels", "01", ("validated_extract",), ("leveled_raw", "time_series_rows"), values_and_levels,
+             module="step_01_values_and_levels"),
         Step("calendar", "02", ("leveled_raw",), ("calendared_raw",),
              lambda context: {"calendared_raw": apply_calendar(context["leveled_raw"], context.configuration)},
              module="step_02_apply_calendar"),
@@ -526,6 +524,9 @@ def sff_steps() -> list:
         Step("core", "NU", ("fine_table", "forecast_units", "support_bound", "rated_units", "series_table", "series_rate",
                             "series_estimate", "pool_dynamics", "backtest", "forecast", "time_series_rows", "time_series",
                             "forecast_total", "ladder", "audit", "series_exam"), ("core", "core_legend", "forecast_series"), core, module="step_nucleo"),
+        Step("power_bi", "22", ("core",), ("power_bi",),
+             lambda context: {"power_bi": build_power_bi_tables(context["core"], context.configuration)},
+             module="step_22_power_bi"),
         Step("validation", "18", ("raw_extract", "backtest", "fine_table", "forecast", "forecast_units", "pool_reference",
                                   "series_exam", "series_estimate", "time_series_rows", "core"), ("validation",),
              lambda context: {"validation": validate_chain(context["raw_extract"], context.results(), context.configuration)}, module="step_18_validation"),

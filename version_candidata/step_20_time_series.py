@@ -12,9 +12,8 @@ campaigns: licences bought in retail that move to an online subscription with an
 There is no signal proportional to the people who move and the campaigns are not modelled:
 it is the best effort with the series itself. These rows come with the REGION and the
 RESULT only (renewed units and renewed USD, the equivalent of what converted); the other
-dimensions and the pipeline are empty. That is why they are split from the raw right after
-step 00 (split_time_series_rows): the normal pipeline never sees them, and this step
-receives them at the end.
+dimensions and the pipeline are empty. That is why step 01 separates them from the raw as its first
+action: the normal pipeline never sees them, and this step receives them at the end.
 
 It adds rows and the total; it changes nothing that came before.
 
@@ -74,7 +73,7 @@ sff_time_series, sff_forecast_total.
 import numpy as np
 import pandas as pd
 
-from config import ACTIVE_FLAG_VALUES, Config, join_columns, parse_month
+from config import Config, join_columns, parse_month, region_columns_of
 from report_queries import forecast_total_query
 from vocabulario import (CALENDAR_ROLE_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_REAL,
                          PIPELINE_SIMULATED, TABLE_FORECAST_TOTAL, TABLE_TIME_SERIES, TOTAL_ORIGIN_EXPECTED,
@@ -98,7 +97,6 @@ STEP_ACTIONS = ["the time_series rows by region and month, and the calendar of t
                 "show the total by year × origin and the 10 regions with the most projected value"]
 STEP_OUTPUT = "region × month rows (ts_real, ts_proyectado, ts_reentrada) · year × origin total · tables sff_time_series, sff_forecast_total"
 
-SPLIT_LABEL = "00b"
 MONEY_TOLERANCE = 0.01
 MONTHS_PER_YEAR = 12
 TOP_REGIONS_SHOWN = 10
@@ -107,54 +105,9 @@ TOP_REGIONS_SHOWN = 10
 REGION_KEY = "region_ts"         # the key of a region: its levels joined, coarse to fine
 
 
-def region_columns_of(configuration: Config) -> list:
-    """The region levels of the universe, coarse to fine (the first mandatory dim if none is declared)."""
-    return list(configuration.ts_region_columns) or [configuration.business_mandatory_dims[0]]
-
-
 def with_region_key(frame: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     """The frame with the key of its finest region (the levels joined)."""
     return frame.assign(**{REGION_KEY: join_columns(frame, region_columns_of(configuration))})
-
-
-# ═══════════════════════════════════════════════════════════════════════════════════
-# THE SPLIT (right after step 00)
-# ═══════════════════════════════════════════════════════════════════════════════════
-
-def split_time_series_rows(validated_raw: pd.DataFrame, configuration: Config) -> tuple:
-    """Split the time_series rows (flag on) from the raw right after step 00.
-
-    INPUT:   the raw validated by step 00 · the Config (flag_time_series_col, region levels).
-    OUTPUT:  (the raw of the normal universe, the time_series rows).
-    RULES:   a row is time_series when its flag is active. Its region and its renewed units
-             and USD must be there; the rest of its dimensions and its pipeline may be empty.
-    EDGE CASES: no time_series row → an empty frame, and step 20 only builds the total.
-    """
-    configuration.logger.doc(f"[{SPLIT_LABEL}] ═══ SPLIT · the time_series universe (retail to subscription) ═══")
-    configuration.logger.doc(f"[{SPLIT_LABEL}] purpose: take the time_series rows out of the raw before step 01: they carry "
-                             f"only the region and the result, and step 20 simulates them at the end")
-    check_log = []
-    flagged = validated_raw[configuration.flag_time_series_col].isin(ACTIVE_FLAG_VALUES)
-    time_series_rows = validated_raw[flagged].copy()
-    normal_raw = validated_raw[~flagged].copy()
-    region_columns = region_columns_of(configuration)
-    configuration.log_action(SPLIT_LABEL, 1, f"{int(flagged.sum()):,} time_series rows out of {len(validated_raw):,}; "
-                                             f"{len(normal_raw):,} rows go on through steps 01-19 · region levels {region_columns}")
-    missing_region = int(time_series_rows[region_columns].isna().any(axis=1).sum()) if len(time_series_rows) else 0
-    configuration.log_check(SPLIT_LABEL, check_log, "every time_series row has every region level", missing_region == 0,
-                            failure_detail=f"{missing_region:,} time_series rows without some region level",
-                            context=f"{time_series_rows[region_columns].drop_duplicates().shape[0] if len(time_series_rows) else 0} "
-                                    f"finest regions")
-    missing_result = int(time_series_rows[configuration.renewed_units_col].isna().sum()
-                         + time_series_rows[configuration.renewed_usd_col].isna().sum()) if len(time_series_rows) else 0
-    closed = time_series_rows[configuration.period_col] < configuration.calendar_boundaries()["current"] if len(time_series_rows) else []
-    missing_closed = int(time_series_rows.loc[closed, [configuration.renewed_units_col, configuration.renewed_usd_col]]
-                         .isna().any(axis=1).sum()) if len(time_series_rows) else 0
-    configuration.log_check(SPLIT_LABEL, check_log, "every closed time_series row has its units and value", missing_closed == 0,
-                            failure_detail=f"{missing_closed:,} closed rows without units or value (read as 0)",
-                            blocking=False)
-    configuration.log_check_summary(SPLIT_LABEL, "SPLIT", check_log)
-    return normal_raw, time_series_rows
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -165,7 +118,7 @@ def build_time_series_and_total(time_series_rows: pd.DataFrame, fine_table: pd.D
                                 configuration: Config) -> tuple:
     """Simulate the time_series universe and build the total by year and origin.
 
-    INPUT:   the time_series rows (split after step 00) · the fine table (normal universe, for the
+    INPUT:   the time_series rows (separated in step 01) · the fine table (normal universe, for the
              rates of the regions and the booked renewals) · the forecast rows of step 17
              (extract and extended horizon) · the Config.
     OUTPUT:  (time_series table: region × month; total table: year × origin).

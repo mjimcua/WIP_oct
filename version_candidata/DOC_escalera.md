@@ -1,4 +1,4 @@
-# La escalera de soporte (pasos 01b, 09, 10 y 11)
+# La escalera de soporte (pasos 01, 09, 10 y 11)
 
 ## Qué resuelve
 
@@ -35,7 +35,7 @@ variación que tendría la tasa aunque el cliente medio no cambiara nada: puro a
 
 **Primera mitad: para separar.** Dos segmentos cuyas tasas difieren menos que σ no se distinguen mes a mes. Separarlos no
 aporta información y quita soporte. Es el criterio de la escalera (juntar mientras el sesgo que se añade es menor que el
-ruido que se quita) y el de los niveles generados (paso 01b: se juntan los valores que difieren menos que el ruido de una
+ruido que se quita) y el de los niveles generados (paso 01: se juntan los valores que difieren menos que el ruido de una
 serie en el suelo, 8,8 pp).
 
 **Segunda mitad: para prometer.** Aunque supiéramos la tasa verdadera de una serie, el mes real caería a su alrededor
@@ -101,7 +101,7 @@ El soporte que se informa en cada etapa es el del grupo con el que la serie pred
 
 El error de la tasa de un mes de `NA·A·tele` pasa de ±12,1 pp sola a ±3,9 pp con su composición (sesgo +3,4 pp).
 
-## Los niveles generados (paso 01b)
+## Los niveles generados (paso 01)
 
 Las dimensiones declaradas en `leveled_dims` (por ejemplo `{"tr_term": "ordinal", "tr_band": "ordinal"}`) **conservan su
 nombre y su valor raw**, que es el nivel fino. La librería añade una sola columna, `<columna>_level_1`, con sus valores

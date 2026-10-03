@@ -77,9 +77,9 @@ def validate_raw(raw: pd.DataFrame, configuration: Config) -> pd.DataFrame:
 
     missing_columns = [column_name for column_name, role in column_roles.items()
                        if role != COLUMN_ROLE_IGNORE and column_name not in raw.columns
-                       and column_name not in configuration.generated_columns]       # made in step 01b
+                       and column_name not in configuration.generated_columns]       # made in step 01
     configuration.log_check(STEP_LABEL, check_log, "every declared column is in the raw (ignored ones may be absent; "
-                            "the generated levels are made in step 01b)",
+                            "the generated levels are made in step 01)",
                             not missing_columns,
                             failure_detail=f"columns declared in the Config but missing from the raw: {missing_columns}")
 
@@ -173,7 +173,7 @@ def check_months(raw: pd.DataFrame, configuration: Config, check_log: list) -> t
 def log_raw_report(validated: pd.DataFrame, configuration: Config, column_roles: dict, raw_months: list) -> None:
     """Action 6: the columns by role and the calendar, rows per role, as tables."""
     configuration.log_action(STEP_LABEL, 6, "the columns of the raw, by role (every role of the Config, also the empty "
-                                            "ones, and the dimensions that get a generated level in step 01b):")
+                                            "ones, and the dimensions that get a generated level in step 01):")
     configuration.show_table(roles_overview(validated.columns, configuration))
 
     configuration.logger.doc(f"[{STEP_LABEL}] the calendar of the Config on these months: "

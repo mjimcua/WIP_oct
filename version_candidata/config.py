@@ -150,7 +150,7 @@ ROLE_PURPOSES = [
     (COLUMN_ROLE_BOTH_EXTRAS, "both extras"),
     (COLUMN_ROLE_FORMULA_INPUT, "inputs of a formula (exact discount, SKU), not a dimension"),
     (COLUMN_ROLE_IGNORE, "read and not used")]
-LEVELED_ROLE = "niveles generados (01b)"
+LEVELED_ROLE = "niveles generados (01)"
 GENERATED_LEVEL_SUFFIX = "_level_1"           # the coarse level the library generates for a leveled dim
 LEVEL_TYPES = ("ordinal", "nominal")          # ordinal: only neighbouring values merge · nominal: any two
 
@@ -175,6 +175,12 @@ def roles_overview(columns, configuration) -> pd.DataFrame:
                      "para_que": "the column keeps its raw value (fine level); _level_1 groups its values by their standardised "
                                  "rate (JSON in levels_path); the ladder collapses the fine level first"})
     return pd.DataFrame(rows)
+
+
+def region_columns_of(configuration) -> list:
+    """The region levels of the time_series universe, coarse to fine (the first mandatory dim if none is
+    declared). Used by step 01 (it separates the universe) and step 20 (it projects it)."""
+    return list(configuration.ts_region_columns) or [configuration.business_mandatory_dims[0]]
 
 
 def join_columns(frame: pd.DataFrame, columns: list) -> pd.Series:
@@ -231,7 +237,7 @@ class Config:
     flag_time_series_col: str = "flag_time_series"          # marks the rows of the time_series universe
 
     business_mandatory_dims: list = field(default_factory=list)       # open the series and the uplift cell
-    leveled_dims: dict = field(default_factory=dict)  # mandatory dims that get a generated coarse level (step 01b):
+    leveled_dims: dict = field(default_factory=dict)  # mandatory dims that get a generated coarse level (step 01):
                                                       # {column: "ordinal" | "nominal"}. The column keeps its raw value
                                                       # (the fine level); <column>_level_1 groups its values by their
                                                       # standardised renewal rate and is added to the mandatory dims
@@ -380,7 +386,7 @@ class Config:
             raise ValueError(f"timevarying signs must be one of {VALID_TIMEVARYING_SIGNS}: {invalid_signs}")
 
         # [2] the leveled dims: mandatory, with a valid type; their generated level is a mandatory dim from
-        #     here on (step 01b creates it before any step reads the dims)
+        #     here on (step 01 creates it before any step reads the dims)
         not_mandatory = [column_name for column_name in self.leveled_dims if column_name not in self.business_mandatory_dims]
         if not_mandatory:
             raise ValueError(f"leveled_dims must be mandatory dims: {not_mandatory}")
@@ -560,13 +566,13 @@ class Config:
 
     @property
     def generated_columns(self) -> list:
-        """The columns the library adds to the raw (step 01b): the coarse level of every leveled dim."""
+        """The columns the library adds to the raw (step 01): the coarse level of every leveled dim."""
         return [f"{column_name}{GENERATED_LEVEL_SUFFIX}" for column_name in self.leveled_dims]
 
     @property
     def extract_mandatory_dims(self) -> list:
         """The mandatory dims the extract brings (the steps that validate the extract, 00 and 01, read these;
-        from step 01b on, business_mandatory_dims, with the generated levels)."""
+        from step 01 on, business_mandatory_dims, with the generated levels)."""
         return [column_name for column_name in self.business_mandatory_dims if column_name not in self.generated_columns]
 
     @property

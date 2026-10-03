@@ -215,10 +215,10 @@ def build_core_table(fine_table: pd.DataFrame, configuration: Config, forecast_u
     INPUT:   the fine table and the results of every step that has run (None = not run).
     OUTPUT:  (core, legend). The core has EVERY row: the original records of the pipeline and of the
              time_series universe, and the synthetic ones (gaps, extended horizon, ts_proyectado,
-             ts_reentrada); every decision as a column; and the FINAL block (fin_*) that answers the
+             ts_reentrada); every decision as a column; and the FINAL block (forecast_*) that answers the
              business questions by summing it.
-    RULES:   the fin_* columns are the same for every row: pipeline due (fin_vence_*) and renewed or
-             revenue (fin_renovad*), real or expected, with its origin. A total of any year and origin
+    RULES:   the forecast_* columns are the same for every row: pipeline due (forecast_to_renew_*) and renewed or
+             revenue (forecast_renewed_*), real or expected, with its origin. A total of any year and origin
              is a SUM of the core; sff_forecast_total must equal it (check 5).
     EDGE CASES: a step not run leaves its block out; no time_series universe → no ts rows."""
     configuration.log_step_start(STEP_LABEL, STEP_NAME, STEP_PURPOSE, STEP_ACTIONS, STEP_OUTPUT)
@@ -400,27 +400,27 @@ def add_backtest_block(core: pd.DataFrame, technique_decision: pd.DataFrame, exa
 
 
 # ─── the final block: the same columns for every row, the ones the business questions sum ───
-FINAL_UNIVERSE_COLUMN = "fin_universo"
-FINAL_ORIGIN_COLUMN = "fin_origen"
-FINAL_STATE_COLUMN = "fin_estado"
-FINAL_YEAR_COLUMN = "fin_ano"
+FINAL_UNIVERSE_COLUMN = "forecast_universe"
+FINAL_ORIGIN_COLUMN = "forecast_pipeline_source"
+FINAL_STATE_COLUMN = "forecast_status"
+FINAL_YEAR_COLUMN = "forecast_year"
 FINAL_UNIVERSE_PIPELINE, FINAL_UNIVERSE_TIME_SERIES = "pipeline", "time_series"
-STATE_REAL, STATE_EXPECTED = "real", "previsto"
+STATE_REAL, STATE_EXPECTED = "actual", "forecast"
 TS_WITHOUT_RESULT = "ts_sin_resultado"       # an original time_series row of a month not closed yet (its result is projected)
 FINAL_VALUES = [
-    ("fin_universo", "fin_universo", "FIN", "pipeline (renewals) · time_series (retail to subscription)"),
-    ("fin_origen", "fin_origen", "FIN", "pipeline_renovado_real · pipeline_real_esperado · pipeline_proyectada · pipeline_simulada · "
+    ("forecast_universe", "forecast_universe", "FIN", "pipeline (renewals) · time_series (retail to subscription)"),
+    ("forecast_pipeline_source", "forecast_pipeline_source", "FIN", "pipeline_renovado_real · pipeline_real_esperado · pipeline_proyectada · pipeline_simulada · "
                                         "ts_real · ts_proyectado · ts_reentrada · hueco · ts_sin_resultado"),
-    ("fin_estado", "fin_estado", "FIN", "real (already happened) · previsto (forecast)"),
-    ("fin_ano", "fin_ano", "FIN", "the year of the month"),
-    ("fin_vence_unidades", "fin_vence_unidades", "FIN", "PIPELINE: units falling due (extract, extended horizon, ts re-entry) · SUM"),
-    ("fin_vence_usd", "fin_vence_usd", "FIN", "PIPELINE: USD falling due (acquisition and ts re-entry: at their discount) · SUM"),
-    ("fin_renovadas_unidades", "fin_renovadas_unidades", "FIN", "RENEWED units: real in closed months, expected in the future; ts: converted units · SUM"),
-    ("fin_renovado_usd", "fin_renovado_usd", "FIN", "RENEWED USD (or time_series revenue): real in closed months, expected in the future · SUM"),
-    ("fin_renovado_usd_bajo", "fin_renovado_usd_bajo", "FIN", "low end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
-    ("fin_renovado_usd_alto", "fin_renovado_usd_alto", "FIN", "high end of the row's band (SUM = the worst case of a total; real rows: the real value)")]
-FINAL_SUMMABLE = {"fin_vence_unidades", "fin_vence_usd", "fin_renovadas_unidades", "fin_renovado_usd", "fin_renovado_usd_bajo",
-                  "fin_renovado_usd_alto"}
+    ("forecast_status", "forecast_status", "FIN", "actual (already happened) · forecast (predicted)"),
+    ("forecast_year", "forecast_year", "FIN", "the year of the month"),
+    ("forecast_to_renew_units", "forecast_to_renew_units", "FIN", "PIPELINE: units falling due (extract, extended horizon, ts re-entry) · SUM"),
+    ("forecast_to_renew_USD", "forecast_to_renew_USD", "FIN", "PIPELINE: USD falling due (acquisition and ts re-entry: at their discount) · SUM"),
+    ("forecast_renewed_units", "forecast_renewed_units", "FIN", "RENEWED units: real in closed months, expected in the future; ts: converted units · SUM"),
+    ("forecast_renewed_USD", "forecast_renewed_USD", "FIN", "RENEWED USD (or time_series revenue): real in closed months, expected in the future · SUM"),
+    ("forecast_renewed_USD_low", "forecast_renewed_USD_low", "FIN", "low end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
+    ("forecast_renewed_USD_high", "forecast_renewed_USD_high", "FIN", "high end of the row's band (SUM = the worst case of a total; real rows: the real value)")]
+FINAL_SUMMABLE = {"forecast_to_renew_units", "forecast_to_renew_USD", "forecast_renewed_units", "forecast_renewed_USD", "forecast_renewed_USD_low",
+                  "forecast_renewed_USD_high"}
 
 
 def rows_of_the_time_series(time_series_rows, time_series_table, core_columns, configuration: Config) -> pd.DataFrame:
@@ -488,17 +488,17 @@ def add_final_block(core: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     core[FINAL_YEAR_COLUMN] = core[configuration.period_col].map(lambda month: month.year)
 
     extract_rows = origin.isin([ROW_FROM_RAW, ROW_FROM_GAP])            # the pipeline after the calendar (s02): not what is not known yet
-    core["fin_vence_unidades"] = np.select([extract_rows, extended, is_time_series],
+    core["forecast_to_renew_units"] = np.select([extract_rows, extended, is_time_series],
                                            [column("s02_vencen_unidades"), column("s17_vencen_unidades"), column("_ts_vence_unidades")], 0.0)
-    core["fin_vence_usd"] = np.select([extract_rows, extended, is_time_series],
+    core["forecast_to_renew_USD"] = np.select([extract_rows, extended, is_time_series],
                                       [column("s02_vencen_usd"), column("s17_vencen_usd"), column("_ts_vence_usd")], 0.0)
-    core["fin_renovadas_unidades"] = np.select([raw_closed, raw_future | extended, is_time_series],
+    core["forecast_renewed_units"] = np.select([raw_closed, raw_future | extended, is_time_series],
                                                [column("s02_renovadas_unidades"), column("s17_esperado_unidades"), column("_ts_renovadas")], 0.0)
-    core["fin_renovado_usd"] = np.select([raw_closed, raw_future | extended, is_time_series],
+    core["forecast_renewed_USD"] = np.select([raw_closed, raw_future | extended, is_time_series],
                                          [column("s02_renovado_usd"), column("s17_esperado_usd"), column("_ts_usd")], 0.0)
     with_band = raw_future | extended
-    core["fin_renovado_usd_bajo"] = np.where(with_band, column("s17_esperado_usd_bajo"), core["fin_renovado_usd"])
-    core["fin_renovado_usd_alto"] = np.where(with_band, column("s17_esperado_usd_alto"), core["fin_renovado_usd"])
+    core["forecast_renewed_USD_low"] = np.where(with_band, column("s17_esperado_usd_bajo"), core["forecast_renewed_USD"])
+    core["forecast_renewed_USD_high"] = np.where(with_band, column("s17_esperado_usd_alto"), core["forecast_renewed_USD"])
     return core.drop(columns=[name for name in core.columns if name.startswith("_ts_")])
 
 
@@ -670,7 +670,7 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
     #     a gap is not a unit of step 04, so the unit blocks are checked on the rows of the extract
     unit_names = {name for _, name, _, _ in UNIT_VALUES_STEP_04 + UNIT_VALUES_STEP_07}
     first_columns = [block_specs[0][1] for block_specs in blocks_present if block_specs and block_specs[0][1] in core.columns
-                     and not block_specs[0][1].startswith(("s13_", "s14_", "s17_", "s19_", "fin_"))]
+                     and not block_specs[0][1].startswith(("s13_", "s14_", "s17_", "s19_", "forecast_"))]
     series_columns = [name for name in first_columns if name not in unit_names]
     unit_columns = [name for name in first_columns if name in unit_names]
     raw_rows = core[ROW_ORIGIN_COLUMN] == ROW_FROM_RAW
@@ -693,27 +693,27 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
                                         "step 20 has not run")
         return
     parts = forecast_total[forecast_total["origen"] != TOTAL_ORIGIN_TOTAL].set_index(["ano", "origen"])
-    summed = core.groupby([FINAL_YEAR_COLUMN, FINAL_ORIGIN_COLUMN])[["fin_vence_usd", "fin_renovado_usd"]].sum()
+    summed = core.groupby([FINAL_YEAR_COLUMN, FINAL_ORIGIN_COLUMN])[["forecast_to_renew_USD", "forecast_renewed_USD"]].sum()
     summed.index = summed.index.set_names(["ano", "origen"])
     compared = parts.join(summed, how="left").fillna(0.0)
-    mismatched = compared[((compared["usd_vence"] - compared["fin_vence_usd"]).abs() > MONEY_TOLERANCE)
-                          | ((compared["usd_renovado"] - compared["fin_renovado_usd"]).abs() > MONEY_TOLERANCE)]
+    mismatched = compared[((compared["usd_vence"] - compared["forecast_to_renew_USD"]).abs() > MONEY_TOLERANCE)
+                          | ((compared["usd_renovado"] - compared["forecast_renewed_USD"]).abs() > MONEY_TOLERANCE)]
     configuration.log_check(STEP_LABEL, check_log, "the core summed by year and origin = sff_forecast_total (the total comes from the core)",
                             mismatched.empty, failure_detail=f"{len(mismatched)} year × origin differ",
                             context=f"{len(compared)} year × origin compared",
-                            examples=mismatched.reset_index()[["ano", "origen", "usd_vence", "fin_vence_usd", "usd_renovado",
-                                                               "fin_renovado_usd"]])
+                            examples=mismatched.reset_index()[["ano", "origen", "usd_vence", "forecast_to_renew_USD", "usd_renovado",
+                                                               "forecast_renewed_USD"]])
 
 
 def log_core_answers(core: pd.DataFrame, configuration: Config) -> None:
     """The business questions answered by SUMMING the core: renewed and pipeline by year, state and origin."""
     current_year = configuration.calendar_boundaries()["current"].year
     answers = (core[core[FINAL_YEAR_COLUMN] >= current_year]
-               .groupby([FINAL_YEAR_COLUMN, FINAL_STATE_COLUMN, FINAL_ORIGIN_COLUMN])[["fin_vence_usd", "fin_renovado_usd"]].sum()
+               .groupby([FINAL_YEAR_COLUMN, FINAL_STATE_COLUMN, FINAL_ORIGIN_COLUMN])[["forecast_to_renew_USD", "forecast_renewed_USD"]].sum()
                .reset_index())
-    answers = answers[(answers["fin_vence_usd"] != 0) | (answers["fin_renovado_usd"] != 0)]
-    configuration.logger.doc(f"[{STEP_LABEL}] the questions answered by SUMMING the core (fin_renovado_usd: renewed or revenue, "
-                             f"real or expected · fin_vence_usd: pipeline), by year, state and origin:")
+    answers = answers[(answers["forecast_to_renew_USD"] != 0) | (answers["forecast_renewed_USD"] != 0)]
+    configuration.logger.doc(f"[{STEP_LABEL}] the questions answered by SUMMING the core (forecast_renewed_USD: renewed or revenue, "
+                             f"real or expected · forecast_to_renew_USD: pipeline), by year, state and origin:")
     configuration.show_table(answers)
 
 
@@ -736,8 +736,8 @@ def log_core_report(core: pd.DataFrame, dimension: pd.DataFrame, configuration: 
          "DIVIDE(CALCULATE(SUM(sff_nucleo[s02_renovadas_unidades]), sff_nucleo[s02_rol] IN {\"entrenamiento\", \"examen\"}), "
          "CALCULATE(SUM(sff_nucleo[s00_vencen_unidades]), sff_nucleo[s02_rol] IN {\"entrenamiento\", \"examen\"}))"),
         ("Vence USD", "SUM(sff_nucleo[s00_vencen_usd])"),
-        ("Renovado (real + previsto)", "SUM(sff_nucleo[fin_renovado_usd])  — segmentar por fin_ano, fin_estado, fin_origen"),
-        ("Pipeline", "SUM(sff_nucleo[fin_vence_usd])  — segmentar por fin_ano, fin_origen"),
+        ("Renovado (actual + forecast)", "SUM(sff_nucleo[forecast_renewed_USD])  — segmentar por forecast_year, forecast_status, forecast_pipeline_source"),
+        ("Pipeline", "SUM(sff_nucleo[forecast_to_renew_USD])  — segmentar por forecast_year, forecast_pipeline_source"),
         ("Examen: dentro del intervalo", "DIVIDE(SUM(sff_forecast_series[s19_exam_in_band]), SUM(sff_forecast_series[s19_exam_predictions]))"),
         ("Examen: WAPE framework / raw", "DIVIDE(SUM(sff_forecast_series[s19_exam_abs_err_units]), SUM(sff_forecast_series[s19_exam_real_units]))"
                                         "  ·  the same with s19_raw_abs_err_units")], columns=["medida", "DAX"]))
