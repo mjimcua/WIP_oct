@@ -42,7 +42,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -375,6 +375,13 @@ class Config:
     renewal_reentry_discount: float = 0.0         # a renewal falls due again at the price it renewed: no discount
     acquisition_column: Optional[str] = None      # the column that says a row is an acquisition; None = no acquisition simulated
     acquisition_values: list = field(default_factory=list)      # its values that are acquisition: each one is simulated apart
+    renewed_acquisition_value: Any = None   # the value of acquisition_column once an acquisition has renewed: the
+                                            # renewal it creates (a proyectada row of step 17) is no longer an
+                                            # acquisition. None = the proyectada row keeps the value of the row due
+    dims_after_renewal: dict = field(default_factory=dict)   # other dims a renewal changes: column → the value of the
+                                                             # renewal it creates (prev_OperationGroup → the renewal
+                                                             # operation). The timevarying marks of a renewal are always
+                                                             # neutral: nothing is known yet of its dormant, softcancel…
                                                                 # (they have different proportions)
     acquisition_discount: float = 0.4             # an acquisition is sold with this discount (it renews without it)
     acquisition_level_window_months: int = 3      # acquisition level: last 3 closed months vs the same months a year before
@@ -486,6 +493,13 @@ class Config:
                                if column_name not in self.business_mandatory_dims]
         if unknown_uplift_dims:
             raise ValueError(f"uplift_mandatory_dims must be mandatory dims: {unknown_uplift_dims}")
+        if self.renewed_acquisition_value is not None and self.renewed_acquisition_value in self.acquisition_values:
+            raise ValueError(f"renewed_acquisition_value ({self.renewed_acquisition_value}) cannot be an acquisition value: "
+                             f"it is what an acquisition becomes once it renews")
+        unknown_after_renewal = [column_name for column_name in self.dims_after_renewal
+                                 if column_name not in self.rate_series_columns + list(self.extra_revalorizacion)]
+        if unknown_after_renewal:
+            raise ValueError(f"dims_after_renewal must be dims of the rate series or the uplift: {unknown_after_renewal}")
         if self.maturation_flag_col and self.maturation_flag_col not in self.structural_timevarying_dims:
             raise ValueError(f"maturation_flag_col ({self.maturation_flag_col}) must be a structural_timevarying_dims mark")
         # the dispersion of the isolated renewals is only readable against their base and renewed USD

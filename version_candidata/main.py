@@ -106,6 +106,8 @@ def production_configuration() -> Config:
         one_year_term_value="1 year",
         acquisition_column="net_new",
         acquisition_values=["Acquisition_Not-New", "Acquisition_Pure-New"],
+        renewed_acquisition_value="Retention_Not-New",      # an acquisition that renews: its next due date is a retention
+        dims_after_renewal={"prev_OperationGroup": "Renewal"},   # after renewing, the previous operation is the renewal
         acquisition_discount=0.4,
         # the time_series universe (retail to subscription): its region and its projection
         ts_region_columns=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3"],   # projected by country
@@ -146,6 +148,7 @@ def synthetic_configuration() -> Config:
         # the simulation window: acquisitions are newcust = 1
         acquisition_column="newcust",
         acquisition_values=[1],
+        renewed_acquisition_value=0,
     )
 
 

@@ -107,6 +107,9 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 ## Maduración del softcancel (4-oct-2026)
 - Acción 7 del paso 17: ajuste al lado del forecast (no dentro) por las marcas que llegarán antes de vencer (intentos de pago, periodo de gracia), por celda mandatory y mes de calendario. Supuesto: la proporción final marcada de este año se parece a la del mismo mes del año pasado; validable cuando haya fotos mensuales del extracto acumuladas.
 
+## Renovaciones proyectadas = retención (4-oct-2026)
+- La renovación proyectada de una adquisición vence al año siguiente como retención (`renewed_acquisition_value` = Retention_Not-New), con `prev_OperationGroup` = Renewal (`dims_after_renewal`) y marcas timevarying neutras. Antes heredaba Acquisition_* y la marca de la fila que vencía: inflaba la vista de adquisición de sep-dic del año siguiente y se predecía con la tasa de primera renovación.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

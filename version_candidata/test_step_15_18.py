@@ -12,6 +12,7 @@ import pandas as pd
 from main import run
 from prediction import judged_horizon
 from step_17_forecast import maturation_adjustment
+from config import ACTIVE_FLAG_VALUES
 from vocabulario import CALENDAR_ROLE_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_REAL, TRUTH_ROLES
 from test_helpers import check, console_of, finish, synthetic_with
 
@@ -47,7 +48,7 @@ def test_steps_15_to_18() -> None:
     configuration = synthetic_with()
     results = {}
     console = console_of(lambda: results.update(run(configuration)))
-    for label, count in (("15", 6), ("16", 3), ("17", 10)):
+    for label, count in (("15", 6), ("16", 3), ("17", 11)):
         check(f"{count} checks: {count} ok" in console.split(f"STEP {label}")[1], f"the checks of step {label} pass")
     check("7 checks:" in console.split("STEP 18")[1] and "0 failed" in console.split("STEP 18")[1].split("STEP NU")[0],
           "the final validation passes (warnings allowed)")
@@ -102,6 +103,22 @@ def test_steps_15_to_18() -> None:
     check("## 7 · El forecast en dinero" in report and "Validación final" in report, "the report tells the forecast and the validation")
 
 
+def test_a_projected_renewal_is_a_retention() -> None:
+    print("P · a projected renewal: no longer an acquisition, its marks neutral")
+    configuration = synthetic_with()
+    results = {}
+    console_of(lambda: results.update(run(configuration)))
+    forecast = results["forecast"]["forecast"]
+    projected = forecast[forecast["origen_pipeline"] == "proyectada"]
+    check(len(projected) > 0 and not projected[configuration.acquisition_column].isin(configuration.acquisition_values).any()
+          and (projected[configuration.acquisition_column] == configuration.renewed_acquisition_value).sum() > 0,
+          "the renewal of an acquisition falls due next year as a retention (renewed_acquisition_value): not counted "
+          "again as an acquisition")
+    check(all((~projected[column_name].isin(ACTIVE_FLAG_VALUES)).all()
+              for column_name in configuration.structural_timevarying_dims if column_name in projected.columns),
+          "the timevarying marks of a projected renewal are neutral (nothing is known yet of them)")
+
+
 def test_the_maturation_of_softcancel() -> None:
     print("M · the maturation of softcancel: hand-made, every number by hand")
     configuration = synthetic_with()
@@ -149,4 +166,5 @@ if __name__ == "__main__":
     test_steps_15_to_18()
     test_acquisition_simulation()
     test_the_maturation_of_softcancel()
+    test_a_projected_renewal_is_a_retention()
     finish()

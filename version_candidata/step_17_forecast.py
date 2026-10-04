@@ -9,7 +9,10 @@ and the rows that the SIMULATION WINDOW creates. The window goes from the curren
   · proyectada  every 1-year licence (term_column = one_year_term_value) due in the window
                 renews as the forecast expects; its renewal falls due the same month next year,
                 with the same dims, units = expected renewed units,
-                value = expected renewed USD, discount renewal_reentry_discount (0)
+                value = expected renewed USD, discount renewal_reentry_discount (0); an acquisition
+                that renews is no longer one: acquisition_column becomes renewed_acquisition_value
+                (an acquisition of the window must not be counted again as one next year); the dims
+                of dims_after_renewal take their declared value; the timevarying marks are neutral
   · simulada    the acquisition of the window, simulated for every value of acquisition_column
                 in acquisition_values apart (they have different proportions): per group of
                 dims, units = units acquired the same month a year before × level (last 3
@@ -187,6 +190,21 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
     # [9] the checks
     configuration.log_action(STEP_LABEL, 9, "checking the forecast")
     check_forecast(future, future, fine_table, by_month, configuration, check_log)
+    after_renewal = dict(configuration.dims_after_renewal)
+    if configuration.acquisition_column and configuration.renewed_acquisition_value is not None:
+        after_renewal[configuration.acquisition_column] = configuration.renewed_acquisition_value
+    history_values = {column_name: set(fine_table[column_name].dropna().astype(str).unique())
+                      for column_name in after_renewal if column_name in fine_table.columns}
+    unseen = {column_name: value for column_name, value in after_renewal.items()
+              if column_name in history_values and str(value) not in history_values[column_name]}
+    configuration.log_check(STEP_LABEL, check_log,
+                            "every value a projected renewal takes after renewing exists in the history "
+                            "(its retention series can be found)",
+                            not unseen,
+                            failure_detail="; ".join(f"{column_name} = {value!r} is not in the data (values: "
+                                                     f"{sorted(history_values[column_name])[:8]})"
+                                                     for column_name, value in unseen.items()),
+                            blocking=False, context=f"{after_renewal}" if after_renewal else "nothing declared")
     if maturation is not None:
         moved_too_much = future[future["maduracion_unidades_migran"] > future[configuration.pipeline_units_col] + 1e-9]
         configuration.log_check(STEP_LABEL, check_log,
@@ -472,7 +490,10 @@ def extend_horizon(fine_table: pd.DataFrame, extract_future: pd.DataFrame, conte
     INPUT:   the fine table (normal universe) · the extract's future rows, already predicted · the context.
     OUTPUT:  the new rows (proyectada and simulada), predicted like any future row.
     RULES:   window = current month … simulation_end; a row of the window falls due in month + 12.
-             proyectada: 1-year rows of the window, expected renewals, same dims, discount 0.
+             proyectada: 1-year rows of the window, expected renewals, same dims, discount 0; an
+             acquisition becomes renewed_acquisition_value (it renewed: it is not an acquisition any more);
+             the dims of dims_after_renewal take their declared value (prev_OperationGroup → the renewal);
+             the timevarying marks are neutral (nothing is known yet of the renewal's marks).
              simulada: acquisitions of the window, per acquisition value and group, level × same
              month a year before, value per unit of 12 months, timevarying off, acquisition_discount.
              The group of an acquisition keeps the grain of the pipeline: every mandatory dim, every
@@ -500,6 +521,22 @@ def extend_horizon(fine_table: pd.DataFrame, extract_future: pd.DataFrame, conte
     projected[configuration.pipeline_usd_col] = renewing["esperado_usd"].to_numpy()
     if configuration.discount_value_column:
         projected[configuration.discount_value_column] = configuration.renewal_reentry_discount
+    # an acquisition that renews is no longer an acquisition: its next due date is a retention (and is predicted
+    # with the retention series, not with the first-renewal rate of the acquisitions)
+    acquisition = configuration.acquisition_column
+    if acquisition and acquisition in projected.columns and configuration.renewed_acquisition_value is not None:
+        was_acquisition = projected[acquisition].isin(configuration.acquisition_values)
+        projected[acquisition] = projected[acquisition].astype(object)
+        projected.loc[was_acquisition, acquisition] = configuration.renewed_acquisition_value
+    # the other dims a renewal changes (the previous operation is now a renewal), as the Config declares them
+    for column_name, value_after_renewal in configuration.dims_after_renewal.items():
+        if column_name in projected.columns:
+            projected[column_name] = projected[column_name].astype(object)
+            projected[column_name] = value_after_renewal
+    # the timevarying marks of a renewal are neutral: nothing is known yet of its dormant, softcancel…
+    for column_name in configuration.structural_timevarying_dims:
+        if column_name in projected.columns:
+            projected[column_name] = inactive_value(fine_table[column_name])
     projected[PIPELINE_ORIGIN_COLUMN] = PIPELINE_PROJECTED
 
     # simulada: the acquisitions of the window
