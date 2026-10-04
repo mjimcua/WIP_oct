@@ -319,6 +319,9 @@ class Config:
     save_checkpoints: bool = True                     # every step saves its tables, so a later run can start from any step
     checkpoint_folder: Optional[str] = None           # where (None: <output_folder>/checkpoints); one .pkl per table + manifest
     structural_timevarying_dims: dict = field(default_factory=dict)   # column → "negative" | "positive"
+    maturation_flag_col: Optional[str] = None   # a timevarying mark that is not final until the due date (softcancel:
+                                                # payment attempts, grace period): step 17 adjusts, NEXT to the forecast,
+                                                # the units expected to be marked before falling due. None = no adjustment
     extra_renovacion: list = field(default_factory=list)              # enter the rate series only
     extra_revalorizacion: list = field(default_factory=list)          # enter the uplift cell only
 
@@ -483,6 +486,8 @@ class Config:
                                if column_name not in self.business_mandatory_dims]
         if unknown_uplift_dims:
             raise ValueError(f"uplift_mandatory_dims must be mandatory dims: {unknown_uplift_dims}")
+        if self.maturation_flag_col and self.maturation_flag_col not in self.structural_timevarying_dims:
+            raise ValueError(f"maturation_flag_col ({self.maturation_flag_col}) must be a structural_timevarying_dims mark")
         # the dispersion of the isolated renewals is only readable against their base and renewed USD
         dispersion_declared = [field_name for field_name in ["isolated_renewed_usd_sq_over_tr_col"]
                                + [band[0] for band in ISOLATED_RATIO_BANDS] if getattr(self, field_name)]

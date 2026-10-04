@@ -150,6 +150,7 @@ TABLE_UPLIFT_BACKTEST = "backtest_uplift"    # step 16: statistical vs contract 
 TABLE_FORECAST = "forecast"                  # step 17: every future fine row with its forecast and bands
 TABLE_FORECAST_MONTH = "forecast_mes"        # step 17: the total by month with its bands
 TABLE_BUSINESS_SUMMARY = "resumen_negocio"   # step 17: the answers by year
+TABLE_FORECAST_MATURATION = "forecast_maduracion"   # step 17: the maturation of the mark, month by month
 TABLE_VALIDATION = "validacion"              # step 18: the final checks across steps
 
 # ─── step 19: the exam of the portfolio (framework vs the spreadsheet) ───────────

@@ -116,7 +116,15 @@ ROW_VALUES_STEP_17 = [(PIPELINE_ORIGIN_COLUMN, "s17_origen_pipeline", "17", "rea
                       ("esperado_unidades", "s17_esperado_unidades", "17", "expected renewed units (SUM)"),
                       ("esperado_usd", "s17_esperado_usd", "17", "expected renewed USD (SUM)"),
                       ("esperado_usd_bajo", "s17_esperado_usd_bajo", "17", "low end of the row's USD band (SUM = the worst case of a total)"),
-                      ("esperado_usd_alto", "s17_esperado_usd_alto", "17", "high end of the row's USD band (SUM = the worst case of a total)")]
+                      ("esperado_usd_alto", "s17_esperado_usd_alto", "17", "high end of the row's USD band (SUM = the worst case of a total)"),
+                      ("maduracion_l", "s17_maduracion_l", "17", "share of the row's unmarked units expected to be marked "
+                                                                 "(maturation_flag_col) before falling due"),
+                      ("maduracion_unidades_migran", "s17_maduracion_unidades_migran", "17",
+                       "units of the row expected to be marked before falling due (SUM)"),
+                      ("maduracion_delta_unidades", "s17_maduracion_delta_unidades", "17",
+                       "the maturation adjustment of the renewed units: next to the forecast, not in it (SUM)"),
+                      ("maduracion_delta_usd", "s17_maduracion_delta_usd", "17",
+                       "the maturation adjustment of the renewed USD: next to the forecast, not in it (SUM)")]
 
 # The blocks of values of the forecast unit, of the series and of its estimation id:
 # (source column, core name, step, description). A block enters when its step has run.
@@ -418,9 +426,17 @@ FINAL_VALUES = [
     ("forecast_renewed_units", "forecast_renewed_units", "FIN", "RENEWED units: real in closed months, expected in the future; ts: converted units · SUM"),
     ("forecast_renewed_USD", "forecast_renewed_USD", "FIN", "RENEWED USD (or time_series revenue): real in closed months, expected in the future · SUM"),
     ("forecast_renewed_USD_low", "forecast_renewed_USD_low", "FIN", "low end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
-    ("forecast_renewed_USD_high", "forecast_renewed_USD_high", "FIN", "high end of the row's band (SUM = the worst case of a total; real rows: the real value)")]
+    ("forecast_renewed_USD_high", "forecast_renewed_USD_high", "FIN", "high end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
+    ("forecast_maturation_units_moved", "forecast_maturation_units_moved", "FIN",
+     "units expected to be marked (softcancel) before falling due: they leave the unmarked side for the marked one · SUM"),
+    ("forecast_renewed_units_maturation_adj", "forecast_renewed_units_maturation_adj", "FIN",
+     "the maturation adjustment of the renewed units, next to forecast_renewed_units (0 where nothing is adjusted) · SUM"),
+    ("forecast_renewed_USD_maturation_adj", "forecast_renewed_USD_maturation_adj", "FIN",
+     "the maturation adjustment of the renewed USD, next to forecast_renewed_USD: forecast + adjustment = the "
+     "forecast with the marks expected at due date · SUM")]
 FINAL_SUMMABLE = {"forecast_to_renew_units", "forecast_to_renew_USD", "forecast_renewed_units", "forecast_renewed_USD", "forecast_renewed_USD_low",
-                  "forecast_renewed_USD_high"}
+                  "forecast_renewed_USD_high", "forecast_maturation_units_moved", "forecast_renewed_units_maturation_adj",
+                  "forecast_renewed_USD_maturation_adj"}
 
 
 def rows_of_the_time_series(time_series_rows, time_series_table, core_columns, configuration: Config) -> pd.DataFrame:
@@ -499,6 +515,10 @@ def add_final_block(core: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     with_band = raw_future | extended
     core["forecast_renewed_USD_low"] = np.where(with_band, column("s17_esperado_usd_bajo"), core["forecast_renewed_USD"])
     core["forecast_renewed_USD_high"] = np.where(with_band, column("s17_esperado_usd_alto"), core["forecast_renewed_USD"])
+    # the maturation adjustment: next to the forecast, only where step 17 adjusted (0 elsewhere)
+    core["forecast_maturation_units_moved"] = np.where(raw_future, column("s17_maduracion_unidades_migran"), 0.0)
+    core["forecast_renewed_units_maturation_adj"] = np.where(raw_future, column("s17_maduracion_delta_unidades"), 0.0)
+    core["forecast_renewed_USD_maturation_adj"] = np.where(raw_future, column("s17_maduracion_delta_usd"), 0.0)
     # the closed-month measures: observed, not predicted: only in the closed months of the extract
     for measure in configuration.closed_month_measures:
         core[measure.core_column] = np.where(raw_closed, column(measure.s02_column), np.nan)
@@ -625,7 +645,8 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
     unit_names = {name for _, name, _, _ in UNIT_VALUES_STEP_04 + UNIT_VALUES_STEP_07}
     row_names = {name for _, name, _, _ in ROW_VALUES_STEP_17}
     summable = {"s17_esperado_unidades", "s17_esperado_usd", "s17_esperado_usd_bajo", "s17_esperado_usd_alto",
-                "s17_vencen_unidades", "s17_vencen_usd"}
+                "s17_vencen_unidades", "s17_vencen_usd", "s17_maduracion_unidades_migran", "s17_maduracion_delta_unidades",
+                "s17_maduracion_delta_usd"}
     for block_specs in blocks_present:
         for _, name, step, description in block_specs:
             if name in {spec_name for _, spec_name, _, _ in FINAL_VALUES}:

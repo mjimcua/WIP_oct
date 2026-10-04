@@ -104,6 +104,9 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 ## Dispersión de las renovaciones isolated (4-oct-2026)
 - Siete medidas nuevas en la firma (el momento de segundo orden y seis tramos de ratio), construidas licencia a licencia: la acción 9 del paso 15 lee las isolated licencia a licencia (desviación típica, histograma por tramos, cerca de 1 y ≥ 1,10, por descuento, serie y mes) y el monitor del paso 22 las lleva a Power BI. Las isolated ya exigen mismo producto, sin upgrades, sin softcancel y no adquisición.
 
+## Maduración del softcancel (4-oct-2026)
+- Acción 7 del paso 17: ajuste al lado del forecast (no dentro) por las marcas que llegarán antes de vencer (intentos de pago, periodo de gracia), por celda mandatory y mes de calendario. Supuesto: la proporción final marcada de este año se parece a la del mismo mes del año pasado; validable cuando haya fotos mensuales del extracto acumuladas.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

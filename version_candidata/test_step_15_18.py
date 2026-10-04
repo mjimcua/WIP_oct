@@ -11,6 +11,8 @@ import pandas as pd
 
 from main import run
 from prediction import judged_horizon
+from step_17_forecast import maturation_adjustment
+from vocabulario import CALENDAR_ROLE_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_REAL, TRUTH_ROLES
 from test_helpers import check, console_of, finish, synthetic_with
 
 
@@ -45,7 +47,7 @@ def test_steps_15_to_18() -> None:
     configuration = synthetic_with()
     results = {}
     console = console_of(lambda: results.update(run(configuration)))
-    for label, count in (("15", 6), ("16", 3), ("17", 8)):
+    for label, count in (("15", 6), ("16", 3), ("17", 10)):
         check(f"{count} checks: {count} ok" in console.split(f"STEP {label}")[1], f"the checks of step {label} pass")
     check("7 checks:" in console.split("STEP 18")[1] and "0 failed" in console.split("STEP 18")[1].split("STEP NU")[0],
           "the final validation passes (warnings allowed)")
@@ -100,7 +102,51 @@ def test_steps_15_to_18() -> None:
     check("## 7 · El forecast en dinero" in report and "Validación final" in report, "the report tells the forecast and the validation")
 
 
+def test_the_maturation_of_softcancel() -> None:
+    print("M · the maturation of softcancel: hand-made, every number by hand")
+    configuration = synthetic_with()
+    flag = configuration.maturation_flag_col
+    dims = configuration.business_mandatory_dims
+    cell = {dims[0]: "EU", dims[1]: "A"}
+    history_rows = []
+    for month in pd.period_range("2025-09", "2026-08", freq="M"):
+        # the final marks: 20 % of what falls due is marked; the unmarked renew 70 %, the marked 10 %
+        for marked, units, renewed in ((0, 80.0, 56.0), (1, 20.0, 2.0)):
+            history_rows.append({**cell, configuration.period_col: month, CALENDAR_ROLE_COLUMN: TRUTH_ROLES[0], flag: marked,
+                                 configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10,
+                                 configuration.renewed_units_col: renewed, configuration.renewed_usd_col: renewed * 10})
+    fine_table = pd.DataFrame(history_rows)
+    target = pd.Period("2027-06", freq="M")                     # far away: today only 10 % of it is marked
+    future = pd.DataFrame([{**cell, configuration.period_col: target, PIPELINE_ORIGIN_COLUMN: PIPELINE_REAL, flag: marked,
+                            configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10,
+                            "h": 10, "tasa": rate, "uplift": 1.0, "esperado_unidades": units * rate,
+                            "esperado_usd": units * 10 * rate}
+                           for marked, units, rate in ((0, 90.0, 0.7), (1, 10.0, 0.1))])
+    adjusted, table = maturation_adjustment(future, fine_table, configuration)
+    unmarked = adjusted[adjusted[flag] == 0].iloc[0]
+    expected_share = (0.20 - 0.10) / (1 - 0.10)
+    check(abs(unmarked["maduracion_l"] - expected_share) < 1e-12,
+          "l = (final share 20 % − today 10 %) / (1 − 10 %) = 11.1 % of the unmarked units will be marked")
+    check(abs(unmarked["maduracion_unidades_migran"] - 10.0) < 1e-9
+          and adjusted[adjusted[flag] == 1]["maduracion_unidades_migran"].iloc[0] == 0.0,
+          "10 of the 90 unmarked units move to the marked side; the marked row moves nothing")
+    check(abs(unmarked["maduracion_delta_unidades"] - 10.0 * (0.1 - 0.7)) < 1e-9,
+          "they renew at the marked rate of the cell (10 %) instead of the row's (70 %): −6 renewed units")
+    month_row = table.iloc[0]
+    check(abs(month_row["marcado_esperado"] - 0.20) < 1e-12 and abs(month_row["marcado_hoy"] - 0.10) < 1e-12,
+          "the table: 10 % marked today, 20 % expected at due date (the history of the same calendar month)")
+    vessels_out = month_row["sin_marca_usd_hoy"] - month_row["sin_marca_usd_esperado"]
+    vessels_in = month_row["marcada_usd_esperado"] - month_row["marcada_usd_hoy"]
+    check(abs(vessels_out - 100 * 0.7) < 1e-9 and abs(vessels_in - 100 * 0.1) < 1e-9
+          and abs(month_row["ajuste_usd"] - (vessels_in - vessels_out)) < 1e-9,
+          "communicating vessels: the unmarked side loses $70, the marked side gains $10, the adjustment is −$60")
+    check(abs(future[configuration.pipeline_units_col].sum() - 100.0) < 1e-9
+          and abs(adjusted["esperado_usd"].sum() - (90 * 10 * 0.7 + 10 * 10 * 0.1)) < 1e-9,
+          "the forecast itself does not change: the adjustment is a column next to it")
+
+
 if __name__ == "__main__":
     test_steps_15_to_18()
     test_acquisition_simulation()
+    test_the_maturation_of_softcancel()
     finish()

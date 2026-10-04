@@ -73,6 +73,9 @@ def production_configuration() -> Config:
         leveled_dims={"tr_term": "ordinal", "tr_band": "ordinal"},
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",
                                      "not_installed": "negative"},            # [por confirmar] the signs
+        # softcancel is not final until the due date (payment attempts, grace period): step 17 adjusts next to the
+        # forecast the units expected to be marked before falling due
+        maturation_flag_col="softcancel",
         extra_renovacion=["net_new", "prev_OperationGroup"],
         extra_revalorizacion=["price_cap", "msrp_increased"],
         # the discount: ONE column, both sides (the bucket is derived with the default edges,
@@ -120,6 +123,7 @@ def synthetic_configuration() -> Config:
         business_mandatory_dims=["region", "product"],
         structural_timevarying_dims={"dormant": "negative", "softcancel": "negative",
                                      "no_instalado": "negative", "autorenew": "positive"},
+        maturation_flag_col="softcancel",
         extra_renovacion=["channel"],
         extra_revalorizacion=["newcust"],
         # the synthetic carries the exact discount as discount_pct and its own bucket as
