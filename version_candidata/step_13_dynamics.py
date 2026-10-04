@@ -72,8 +72,6 @@ STEP_OUTPUT = "one row per pool (φ, trend, season, months high/low) · the port
 # ─── named constants ─────────────────────────────────────────────────────────────
 PERCENTAGE_POINTS = 100
 MONTHS_PER_YEAR = 12
-MONTH_SIGNIFICANCE_SIGMAS = 2.0      # a month is 'high' or 'low' when it deviates by more than 2 errors
-PHI_WITH_ENGINE = 1.5                # for the summary: φ above this = clearly more than noise
 
 
 def measure_dynamics(pool_series: pd.DataFrame, pool_reference: pd.DataFrame, configuration: Config) -> tuple:
@@ -188,9 +186,9 @@ def dynamics_of_one_series(monthly: pd.DataFrame, period_column: str, configurat
     month_error = np.sqrt(within / within_df / month_count)
     deviation_pp = PERCENTAGE_POINTS * (month_effect - overall)
     high_months = [int(month) for month in month_effect.index
-                   if month_effect[month] - overall > MONTH_SIGNIFICANCE_SIGMAS * month_error[month]]
+                   if month_effect[month] - overall > configuration.month_significance_sigmas * month_error[month]]
     low_months = [int(month) for month in month_effect.index
-                  if overall - month_effect[month] > MONTH_SIGNIFICANCE_SIGMAS * month_error[month]]
+                  if overall - month_effect[month] > configuration.month_significance_sigmas * month_error[month]]
 
     # consistency: the month profile of the first half of the years vs the second half
     middle_year = np.median(np.unique(years))
@@ -198,7 +196,7 @@ def dynamics_of_one_series(monthly: pd.DataFrame, period_column: str, configurat
     second_half = detrended[years > middle_year].groupby("mes")["residuo"].mean()
     shared = first_half.index.intersection(second_half.index)
     # a profile that does not move in one of the halves has no correlation (a series with the same rate every month)
-    both_move = len(shared) >= 3 and first_half[shared].std() > 0 and second_half[shared].std() > 0
+    both_move = len(shared) >= configuration.dynamics_min_shared_months and first_half[shared].std() > 0 and second_half[shared].std() > 0
     consistency = float(np.corrcoef(first_half[shared], second_half[shared])[0, 1]) if both_move else np.nan
 
     profile = pd.DataFrame({"mes": month_effect.index.astype(int), "efecto_pp": deviation_pp.to_numpy(),
@@ -228,7 +226,7 @@ def log_dynamics_report(pool_dynamics: pd.DataFrame, portfolio: dict, portfolio_
             return {"pools": int(mask.sum()), "usd_por_predecir": pool_dynamics.loc[mask, "usd_por_predecir"].sum(),
                     "pct_usd": pool_dynamics.loc[mask, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0}
         summary = pd.DataFrame([
-            {"atributo": f"φ > {PHI_WITH_ENGINE} (more than noise)", **share(pool_dynamics["phi"] > PHI_WITH_ENGINE)},
+            {"atributo": f"φ > {configuration.phi_with_engine} (more than noise)", **share(pool_dynamics["phi"] > configuration.phi_with_engine)},
             {"atributo": "trend (+1 or −1)", **share(pool_dynamics["tendencia"] != 0)},
             {"atributo": "seasonal (month effect)", **share(pool_dynamics["estacional"] == 1)},
             {"atributo": "all pools measured", **share(pool_dynamics["phi"].notna())}])

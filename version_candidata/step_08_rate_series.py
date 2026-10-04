@@ -70,8 +70,6 @@ STEP_OUTPUT = ("the forecast units with gap rows and the rate of every unit · o
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 PERCENTAGE_POINTS = 100
-NO_EVIDENCE_RATE = 0.5          # the rate the Wilson error is computed at when a series has no own rate
-LARGEST_SERIES_SHOWN = 5
 
 
 def wilson_half_width_pp(rates: np.ndarray, supports: np.ndarray, z: float) -> np.ndarray:
@@ -222,7 +220,7 @@ def summarise_series(rated_units: pd.DataFrame, series_table: pd.DataFrame, conf
     summary[["meses_historia", "huecos"]] = summary[["meses_historia", "huecos"]].fillna(0).astype(int)
 
     summary["tasa_propia"] = summary["renovadas"] / summary["vencen"].where(summary["vencen"] > 0)
-    summary["error_binomial_pp"] = wilson_half_width_pp(summary["tasa_propia"].fillna(NO_EVIDENCE_RATE).clip(0, 1),
+    summary["error_binomial_pp"] = wilson_half_width_pp(summary["tasa_propia"].fillna(configuration.no_evidence_rate).clip(0, 1),
                                                         summary["n_propio"], configuration.z)
     summary["bajo_suelo"] = (summary["n_propio"] < configuration.support_floor).astype(int)
     return summary
@@ -301,8 +299,8 @@ def log_rate_series_report(series_rate: pd.DataFrame, configuration: Config) -> 
                                             "pct_usd": series_rate.loc[mask, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0}
                                            for group_name, mask in groups.items()]))
 
-    configuration.logger.doc(f"[{STEP_LABEL}] the {LARGEST_SERIES_SHOWN} series with the most to predict "
+    configuration.logger.doc(f"[{STEP_LABEL}] the {configuration.largest_series_shown} series with the most to predict "
                              f"(own rate ± its binomial error of one month):")
-    configuration.show_table(series_rate.nlargest(LARGEST_SERIES_SHOWN, "usd_por_predecir")[
+    configuration.show_table(series_rate.nlargest(configuration.largest_series_shown, "usd_por_predecir")[
         [SERIES_ID_COLUMN, ROUTE_COLUMN, SIGN_COLUMN, "n_propio", "meses_historia", "huecos", "tasa_propia",
          "error_binomial_pp", "usd_por_predecir"]])

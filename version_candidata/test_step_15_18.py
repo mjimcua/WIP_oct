@@ -11,7 +11,7 @@ import pandas as pd
 
 from main import run
 from prediction import judged_horizon
-from step_17_forecast import maturation_adjustment
+from step_17_forecast import distribute_marks, distribution_table
 from config import ACTIVE_FLAG_VALUES
 from vocabulario import CALENDAR_ROLE_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_REAL, TRUTH_ROLES
 from test_helpers import check, console_of, finish, synthetic_with
@@ -68,6 +68,9 @@ def test_steps_15_to_18() -> None:
     check("LICENCE BY LICENCE, the isolated renewals: mean ratio" in console and "std deviation between licences" in console
           and "histogram · the value of the isolated renewals by renewal ratio" in console,
           "the revaluation report reads the isolated renewals licence by licence: std deviation and ratio bands")
+    check("MARCAS TIMEVARYING: DIAGNÓSTICO" in console and "C · el tamaño del efecto" in console
+          and "FIN DEL DIAGNÓSTICO DE MARCAS" in console,
+          "step 17 prints the diagnostic of the timevarying marks: today against final, their cost, the size of the effect")
     check("between SERIES" in console and "histogram · every series in the distribution" in console
           and "█" in console and "month by month (24 closed" in console,
           "the revaluation report prints the claim, the histogram and the monthly path on screen (action 9)")
@@ -119,52 +122,66 @@ def test_a_projected_renewal_is_a_retention() -> None:
           "the timevarying marks of a projected renewal are neutral (nothing is known yet of them)")
 
 
-def test_the_maturation_of_softcancel() -> None:
-    print("M · the maturation of softcancel: hand-made, every number by hand")
+def test_the_distribution_of_the_marks() -> None:
+    print("M · the distribution of the timevarying marks: hand-made, two marks, every number by hand")
     configuration = synthetic_with()
-    flag = configuration.maturation_flag_col
-    dims = configuration.business_mandatory_dims
-    cell = {dims[0]: "EU", dims[1]: "A"}
+    marks = [mark for mark, sign in configuration.structural_timevarying_dims.items() if sign == "negative"]
+    softcancel, dormant = "softcancel", "dormant"
+    base_row = {column_name: "x" for column_name in configuration.rate_series_columns + configuration.business_mandatory_dims}
+    base_row.update({mark: 0 for mark in configuration.structural_timevarying_dims})
     history_rows = []
     for month in pd.period_range("2025-09", "2026-08", freq="M"):
-        # the final marks: 20 % of what falls due is marked; the unmarked renew 70 %, the marked 10 %
-        for marked, units, renewed in ((0, 80.0, 56.0), (1, 20.0, 2.0)):
-            history_rows.append({**cell, configuration.period_col: month, CALENDAR_ROLE_COLUMN: TRUTH_ROLES[0], flag: marked,
-                                 configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10,
-                                 configuration.renewed_units_col: renewed, configuration.renewed_usd_col: renewed * 10})
+        # the final mix: 80 % neutral (renews 70 %), 15 % softcancel (10 %), 5 % dormant (50 %)
+        for marks_on, units, renewed in (({}, 80.0, 56.0), ({softcancel: 1}, 15.0, 1.5), ({dormant: 1}, 5.0, 2.5)):
+            history_rows.append({**base_row, **marks_on, configuration.period_col: month,
+                                 CALENDAR_ROLE_COLUMN: TRUTH_ROLES[0], configuration.pipeline_units_col: units,
+                                 configuration.pipeline_usd_col: units * 10, configuration.renewed_units_col: renewed,
+                                 configuration.renewed_usd_col: renewed * 10})
     fine_table = pd.DataFrame(history_rows)
-    target = pd.Period("2027-06", freq="M")                     # far away: today only 10 % of it is marked
-    future = pd.DataFrame([{**cell, configuration.period_col: target, PIPELINE_ORIGIN_COLUMN: PIPELINE_REAL, flag: marked,
-                            configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10,
-                            "h": 10, "tasa": rate, "uplift": 1.0, "esperado_unidades": units * rate,
-                            "esperado_usd": units * 10 * rate}
-                           for marked, units, rate in ((0, 90.0, 0.7), (1, 10.0, 0.1))])
-    adjusted, table = maturation_adjustment(future, fine_table, configuration)
-    unmarked = adjusted[adjusted[flag] == 0].iloc[0]
-    expected_share = (0.20 - 0.10) / (1 - 0.10)
-    check(abs(unmarked["maduracion_l"] - expected_share) < 1e-12,
-          "l = (final share 20 % − today 10 %) / (1 − 10 %) = 11.1 % of the unmarked units will be marked")
-    check(abs(unmarked["maduracion_unidades_migran"] - 10.0) < 1e-9
-          and adjusted[adjusted[flag] == 1]["maduracion_unidades_migran"].iloc[0] == 0.0,
-          "10 of the 90 unmarked units move to the marked side; the marked row moves nothing")
-    check(abs(unmarked["maduracion_delta_unidades"] - 10.0 * (0.1 - 0.7)) < 1e-9,
-          "they renew at the marked rate of the cell (10 %) instead of the row's (70 %): −6 renewed units")
+    target = pd.Period("2027-06", freq="M")                     # far away: today 10 % softcancel, no dormant yet
+    future = pd.DataFrame([{**base_row, **marks_on, configuration.period_col: target, PIPELINE_ORIGIN_COLUMN: PIPELINE_REAL,
+                            configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10, "h": 10,
+                            "tasa": rate, "uplift": 1.0, "esperado_unidades": units * rate, "esperado_usd": units * 10 * rate,
+                            "esperado_usd_bajo": units * 10 * rate * 0.9, "esperado_usd_alto": units * 10 * rate * 1.1}
+                           for marks_on, units, rate in (({}, 90.0, 0.7), ({softcancel: 1}, 10.0, 0.1))])
+    adjusted = distribute_marks(future, fine_table, configuration)
+    table = distribution_table(adjusted, configuration)
+    neutral = adjusted[adjusted[softcancel] == 0].iloc[0]
+    check(abs(neutral["maduracion_unidades_migran"] - 10.0) < 1e-9
+          and adjusted[adjusted[softcancel] == 1]["maduracion_unidades_migran"].iloc[0] == 0.0,
+          "gaps: softcancel 15 % − 10 % = 5 points, dormant 5 % − 0 = 5 points: 10 of the 90 neutral units move")
+    check(abs(neutral["maduracion_delta_unidades"] - (5 * (0.1 - 0.7) + 5 * (0.5 - 0.7))) < 1e-9,
+          "5 units renew at the softcancel rate (10 %) and 5 at the dormant rate (50 %) instead of 70 %: −4 renewed units")
+    check(abs(adjusted["esperado_unidades"].sum() - (90 * 0.7 + 10 * 0.1 - 4)) < 1e-9
+          and abs(adjusted["esperado_unidades_base"].sum() - (90 * 0.7 + 10 * 0.1)) < 1e-9,
+          "the forecast IS the distributed one (60 units); the base with today's marks stays next to it (64)")
     month_row = table.iloc[0]
-    check(abs(month_row["marcado_esperado"] - 0.20) < 1e-12 and abs(month_row["marcado_hoy"] - 0.10) < 1e-12,
-          "the table: 10 % marked today, 20 % expected at due date (the history of the same calendar month)")
-    vessels_out = month_row["sin_marca_usd_hoy"] - month_row["sin_marca_usd_esperado"]
-    vessels_in = month_row["marcada_usd_esperado"] - month_row["marcada_usd_hoy"]
-    check(abs(vessels_out - 100 * 0.7) < 1e-9 and abs(vessels_in - 100 * 0.1) < 1e-9
+    check(abs(month_row[f"{softcancel}_esperado"] - 0.15) < 1e-12 and abs(month_row[f"{dormant}_esperado"] - 0.05) < 1e-12
+          and abs(month_row[f"{softcancel}_hoy"] - 0.10) < 1e-12,
+          "the table: softcancel 10 % today → 15 % expected, dormant 0 % → 5 %: the historical mix of the same month")
+    vessels_out = month_row["sin_marca_usd_base"] - month_row["sin_marca_usd_final"]
+    vessels_in = month_row["marcada_usd_final"] - month_row["marcada_usd_base"]
+    check(abs(vessels_out - 100 * 0.7) < 1e-9 and abs(vessels_in - (50 * 0.1 + 50 * 0.5)) < 1e-9
           and abs(month_row["ajuste_usd"] - (vessels_in - vessels_out)) < 1e-9,
-          "communicating vessels: the unmarked side loses $70, the marked side gains $10, the adjustment is −$60")
-    check(abs(future[configuration.pipeline_units_col].sum() - 100.0) < 1e-9
-          and abs(adjusted["esperado_usd"].sum() - (90 * 10 * 0.7 + 10 * 10 * 0.1)) < 1e-9,
-          "the forecast itself does not change: the adjustment is a column next to it")
+          "communicating vessels: the neutral side loses $70, the marked side gains $30, the adjustment is −$40")
+    check(abs(adjusted["esperado_usd_bajo"].sum() - (adjusted["esperado_usd_base"].sum() * 0.9 + month_row["ajuste_usd"])) < 1e-6,
+          "the band moves with the forecast: the same delta")
+    today_marked = adjusted.copy()
+    today_marked[dormant] = 0
+    today_marked.loc[today_marked[softcancel] == 0, softcancel] = 0
+    already_final = future.copy()
+    already_final.loc[already_final[softcancel] == 1, configuration.pipeline_units_col] = 30.0     # today above final
+    already_final.loc[already_final[softcancel] == 1, configuration.pipeline_usd_col] = 300.0
+    adjusted_again = distribute_marks(already_final.drop(columns=[c for c in already_final.columns if c.startswith("maduracion")
+                                                                    or c.endswith("_base")]), fine_table, configuration)
+    moved_to_softcancel = adjusted_again["maduracion_unidades_migran"].sum()
+    check(abs(moved_to_softcancel - 90 * (0.05 / (90 / 120))) < 1e-9,
+          "a mark only grows: softcancel already above its final share moves nothing back; only dormant's gap moves")
 
 
 if __name__ == "__main__":
     test_steps_15_to_18()
     test_acquisition_simulation()
-    test_the_maturation_of_softcancel()
+    test_the_distribution_of_the_marks()
     test_a_projected_renewal_is_a_retention()
     finish()

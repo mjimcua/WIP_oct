@@ -61,9 +61,7 @@ STEP_ACTIONS = ["the card of every series",
 STEP_OUTPUT = "one row per series (the card) · table sff_ficha_serie · file informe_sff.md"
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-PROMISE_PP = 5.0                 # the promise to the business: a rate known within ±5 pp (90 %)
 CHAPTER_COUNT = 8
-TOP_ROWS = 10
 
 
 def markdown_table(frame: pd.DataFrame, decimals: int = 2) -> str:
@@ -247,7 +245,7 @@ def chapter_new_rows(results: dict, configuration: Config) -> str:
     lines += [f"**Los huecos:** {int(with_gaps['huecos'].sum()):,} en {len(with_gaps):,} series, el "
               f"{with_gaps['huecos'].sum() / history_months if history_months else 0:.1%} de los meses de historia. "
               f"Las series con más huecos:", "",
-              markdown_table(with_gaps.head(TOP_ROWS)[[SERIES_ID_COLUMN, "meses_historia", "huecos", "n_propio", "usd_por_predecir"]], 0)]
+              markdown_table(with_gaps.head(configuration.report_top_rows)[[SERIES_ID_COLUMN, "meses_historia", "huecos", "n_propio", "usd_por_predecir"]], 0)]
     return "\n".join(lines) + "\n"
 
 
@@ -310,13 +308,13 @@ def chapter_support(results: dict, configuration: Config, headline: list) -> str
 
     before_error = card["error_binomial_pp"].where(with_history)
     after_error = configuration.z * card["se_estimacion_pp"]
-    within_before = card.loc[before_error <= PROMISE_PP, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
-    within_after = card.loc[after_error <= PROMISE_PP, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
+    within_before = card.loc[before_error <= configuration.promise_pp, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
+    within_after = card.loc[after_error <= configuration.promise_pp, "usd_por_predecir"].sum() / total_usd if total_usd else 0.0
     headline.append(("USD con la tasa conocida a ±5 pp: antes → después de la escalera", f"{within_before:.0%} → {within_after:.0%}"))
     comparison = pd.DataFrame([
         {"medida": "error de la tasa (90 %), ponderado por USD", "antes_pp": np.average(before_error.fillna(50), weights=card["usd_por_predecir"] + 1e-9),
          "despues_pp": np.average(after_error.fillna(50), weights=card["usd_por_predecir"] + 1e-9)},
-        {"medida": f"% del USD con la tasa conocida a ±{PROMISE_PP:.0f} pp", "antes_pp": within_before * 100, "despues_pp": within_after * 100}])
+        {"medida": f"% del USD con la tasa conocida a ±{configuration.promise_pp:.0f} pp", "antes_pp": within_before * 100, "despues_pp": within_after * 100}])
     levels = results["money_by_level"]
     lines = ["## 3 · El soporte binomial, antes y después de la escalera", "",
              "La tasa de un mes es k renovaciones de n contratos: aunque nada cambie, oscila por azar "
@@ -361,7 +359,7 @@ def chapter_dynamics(results: dict, configuration: Config) -> str:
              markdown_table(profile)]
     if dynamics is not None and len(dynamics):
         lines += ["**Los pools con soporte, uno a uno:**", "",
-                  markdown_table(dynamics.sort_values("usd_por_predecir", ascending=False).head(TOP_ROWS)
+                  markdown_table(dynamics.sort_values("usd_por_predecir", ascending=False).head(configuration.report_top_rows)
                                  [[COMPOSITION_ID_COLUMN, "meses", "phi", "tendencia_pp_ano", "estacional", "amplitud_pp",
                                    "meses_alto", "meses_bajo", "usd_por_predecir"]])]
     return "\n".join(lines) + "\n"

@@ -13,7 +13,10 @@ Tables written (one per auxiliary table; this step will grow with the report):
                                  retention discounts in it), the step against the average of the previous 12
                                  months, and the increase cycle (a price increase affects the renewals
                                  of ONE cycle: who renews pays the new price, but a year later everyone
-                                 already bought at it, so the step lasts CYCLE_MONTHS and then fades)
+                                 already bought at it, so the step lasts configuration.price_cycle_months and then fades)
+  sff_parametros                 one row per field of the Config: its value in this run, its default,
+                                 whether it was changed, the steps whose code reads it and the steps
+                                 its comment documents, and the comment (what it decides)
   sff_forecast_pipeline_source   one row per value of forecast_pipeline_source (the origin of every
                                  row of the core): its business label, the block it belongs to and its
                                  order in the report. Relation in Power BI:
@@ -39,7 +42,7 @@ import pandas as pd
 
 from config import (CORE_ISOLATED_BAND_PREFIX, CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD,
                     CORE_ISOLATED_RENEWED_UNITS, CORE_ISOLATED_RENEWED_USD, CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR,
-                    CORE_RENEWED_PIPELINE_USD, ISOLATED_RATIO_BANDS, Config, weighted_ratio_spread)
+                    CORE_RENEWED_PIPELINE_USD, ISOLATED_RATIO_BANDS, Config, parameter_table, weighted_ratio_spread)
 from step_nucleo import FINAL_ORIGIN_COLUMN, TS_WITHOUT_RESULT
 from vocabulario import (ROW_FROM_GAP, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_RENEWED,
                          TOTAL_ORIGIN_SIMULATED, TS_PROJECTED, TS_REAL, TS_REENTRY)
@@ -51,8 +54,9 @@ STEP_PURPOSE = ("build the auxiliary tables of the Power BI report (names, order
                 "so that Power BI only relates and sums: no logic inside the report")
 STEP_ACTIONS = ["the table of pipeline sources: code, label, block, order",
                 "the price increase monitor: the uplift of the closed months and its steps",
+                "the parameters of this run: every field of the Config, its value and the steps that read it",
                 "check the tables against the core (checks 1-4)",
-                "write them (checks 5-6)",
+                "write them (checks 5-7)",
                 "count the checks; stop if any failed",
                 "show the tables"]
 STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeline_source) and "
@@ -60,13 +64,10 @@ STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeli
 
 PIPELINE_SOURCE_TABLE = "forecast_pipeline_source"
 PRICE_MONITOR_TABLE = "price_increase_monitor"
+PARAMETERS_TABLE = "parametros"
 
 # the detector of price increases, over the uplift of the isolated renewals (no retention event):
-PRICE_STEP_THRESHOLD = 0.03    # a month this far above the average of its previous 12 is above the threshold
-PERSISTENCE_MONTHS = 3         # an increase is a step that STAYS: this many consecutive months above the threshold
                                # (one noisy month is not an increase; the price of it: a step is confirmed 2 months late)
-CYCLE_MONTHS = 12              # the effect of an increase lasts one renewal cycle: 12 months of due dates
-MIN_REFERENCE_MONTHS = 6       # fewer previous months than this: no reference yet, no flag
 
 # the blocks of the report: where each source sits when the pipeline of a year is broken down
 BLOCK_EXTRACT_PIPELINE = "Extract pipeline"        # due dates already in the extract
@@ -114,8 +115,15 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
                                             f"{price_monitor.attrs['detector_series']} · increases flagged: "
                                             f"{flagged_months if flagged_months else 'none'}")
 
-    # [3] the checks against the core
-    configuration.log_action(STEP_LABEL, 3, "checking the tables against the core")
+    # [3] the parameters of this run
+    parameters = parameter_table(configuration)
+    changed = parameters[parameters["cambiado"] == 1]
+    configuration.log_action(STEP_LABEL, 3, f"{len(parameters)} parameters in the Config · {len(changed)} with a value of "
+                                            f"this run (not its default) · "
+                                            f"{int((parameters['pasos'] == '').sum())} read by no step")
+
+    # [4] the checks against the core
+    configuration.log_action(STEP_LABEL, 4, "checking the tables against the core")
     sources_in_core = set(core_table[FINAL_ORIGIN_COLUMN].dropna().unique())
     sources_in_table = set(pipeline_source_table[FINAL_ORIGIN_COLUMN])
     sources_without_row = sorted(sources_in_core - sources_in_table)
@@ -141,26 +149,29 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
     flags_without_reference = price_monitor[(price_monitor["price_increase_flag"] == 1)
                                             & price_monitor["uplift_previous_12"].isna()]
     configuration.log_check(STEP_LABEL, check_log,
-                            f"an increase is only flagged against a reference of ≥ {MIN_REFERENCE_MONTHS} previous months",
+                            f"an increase is only flagged against a reference of ≥ {configuration.price_min_reference_months} previous months",
                             flags_without_reference.empty,
                             failure_detail=f"{len(flags_without_reference)} months flagged without a reference")
 
-    # [4] the writes
-    configuration.log_action(STEP_LABEL, 4, "writing the tables")
+    # [5] the writes
+    configuration.log_action(STEP_LABEL, 5, "writing the tables")
     configuration.write_table(STEP_LABEL, check_log, pipeline_source_table, PIPELINE_SOURCE_TABLE)
     configuration.write_table(STEP_LABEL, check_log, price_monitor.drop(columns=["renewed_units"]), PRICE_MONITOR_TABLE)
+    configuration.write_table(STEP_LABEL, check_log, parameters, PARAMETERS_TABLE)
 
-    # [5] the count
-    configuration.log_action(STEP_LABEL, 5, "counting the checks")
+    # [6] the count
+    configuration.log_action(STEP_LABEL, 6, "counting the checks")
     configuration.log_check_summary(STEP_LABEL, STEP_NAME, check_log)
 
-    # [6] the tables on screen
-    configuration.log_action(STEP_LABEL, 6, "the pipeline sources, as Power BI will show them, and the last 13 months "
-                                            "of the price increase monitor:")
+    # [7] the tables on screen
+    configuration.log_action(STEP_LABEL, 7, "the pipeline sources, as Power BI will show them, the last 13 months of the "
+                                            "price increase monitor, and the parameters of this run by step:")
     configuration.show_table(pipeline_source_table)
     configuration.show_table(price_monitor.drop(columns=["renewed_units"]).tail(13))
+    configuration.show_table(parameters[["parametro", "valor", "por_defecto", "cambiado", "pasos"]])
 
-    return {"pipeline_source": pipeline_source_table, "price_monitor": price_monitor.drop(columns=["renewed_units"])}
+    return {"pipeline_source": pipeline_source_table, "price_monitor": price_monitor.drop(columns=["renewed_units"]),
+            "parameters": parameters}
 
 
 
@@ -177,17 +188,17 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
              desv_isolated (the std deviation of the ratio between isolated licences),
              share_isolated_near_100 (their value in [0.95, 1.05)), share_isolated_ge110 (at or above 1.10),
              uplift_previous_12 (average of the previous 12 months, NaN with fewer than
-             MIN_REFERENCE_MONTHS), uplift_step (the month over that average, − 1), above_threshold (step
-             ≥ PRICE_STEP_THRESHOLD), price_increase_flag (1 in the FIRST month of a run of ≥
-             PERSISTENCE_MONTHS months above the threshold: an increase is a step that stays, one noisy
-             month is not), in_increase_cycle (a flagged month in this or the previous CYCLE_MONTHS − 1
+             configuration.price_min_reference_months), uplift_step (the month over that average, − 1), above_threshold (step
+             ≥ configuration.price_step_threshold), price_increase_flag (1 in the FIRST month of a run of ≥
+             configuration.price_persistence_months months above the threshold: an increase is a step that stays, one noisy
+             month is not), in_increase_cycle (a flagged month in this or the previous configuration.price_cycle_months − 1
              months) and months_since_increase. A run still too short at the end of the history is not
              flagged yet: it is confirmed when its months close.
     RULES:   the detector runs on uplift_isolated when it can be computed (no retention discounts in it),
              on the plain uplift otherwise; attrs["detector_series"] says which.
              A price increase raises the uplift of the renewals of ONE cycle: who renews pays the new
              tariff against the old one. A cycle later everyone due already bought at the new tariff and
-             the step fades, so in_increase_cycle marks exactly CYCLE_MONTHS months per detected step.
+             the step fades, so in_increase_cycle marks exactly configuration.price_cycle_months months per detected step.
     """
     closed = core_table[(core_table["forecast_status"] == "actual") & (core_table["forecast_universe"] == "pipeline")
                         & (core_table["forecast_to_renew_units"] > 0)].copy()
@@ -237,9 +248,9 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
     # the detector: the chosen series against the average of its previous 12 months
     detector_series = "uplift_isolated" if monitor["uplift_isolated"].notna().any() else "uplift"
     detector = monitor[detector_series]
-    monitor["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=MIN_REFERENCE_MONTHS).mean()
+    monitor["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=configuration.price_min_reference_months).mean()
     monitor["uplift_step"] = detector / monitor["uplift_previous_12"] - 1
-    above = ((monitor["uplift_step"] >= PRICE_STEP_THRESHOLD) & monitor["uplift_previous_12"].notna()).to_numpy()
+    above = ((monitor["uplift_step"] >= configuration.price_step_threshold) & monitor["uplift_previous_12"].notna()).to_numpy()
     monitor["above_threshold"] = above.astype(int)
     flags = np.zeros(len(monitor), dtype=int)
     position = 0
@@ -250,11 +261,11 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
         run_end = position
         while run_end < len(above) and above[run_end]:
             run_end += 1
-        if run_end - position >= PERSISTENCE_MONTHS:
+        if run_end - position >= configuration.price_persistence_months:
             flags[position] = 1                      # the increase starts where the run starts
         position = run_end
     monitor["price_increase_flag"] = flags
-    monitor["in_increase_cycle"] = (monitor["price_increase_flag"].rolling(window=CYCLE_MONTHS, min_periods=1)
+    monitor["in_increase_cycle"] = (monitor["price_increase_flag"].rolling(window=configuration.price_cycle_months, min_periods=1)
                                     .max().astype(int))
     months_since = []
     last_flagged_position = None

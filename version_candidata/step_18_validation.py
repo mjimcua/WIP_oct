@@ -54,9 +54,6 @@ STEP_ACTIONS = ["the money along the chain",
                 "count the checks; stop if any failed"]
 STEP_OUTPUT = "one row per check · table sff_validacion"
 
-MONEY_TOLERANCE = 0.01
-MAX_RATE_JUMP_PP = 15.0
-MAX_EXAM_TOTAL_ERROR = 0.10
 
 
 def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> pd.DataFrame:
@@ -72,11 +69,11 @@ def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> p
     wiped = fine[S0_PIPELINE_USD_COLUMN].sum() - fine[due].sum()               # step 02: the pipeline not known yet
     totals = {"extracto": raw[due].sum() - time_series_due - wiped, "tabla_fina": fine[due].sum(), "forecast_units": units[due].sum()}
     configuration.log_check(STEP_LABEL, check_log, "Σ USD due: extract (without time_series and the pipeline not known yet) = fine table = forecast units",
-                            max(totals.values()) - min(totals.values()) <= MONEY_TOLERANCE,
+                            max(totals.values()) - min(totals.values()) <= configuration.money_tolerance,
                             failure_detail=f"totals differ: {totals}", context=f"${totals['extracto']:,.0f}")
     future_due = fine.loc[fine[CALENDAR_ROLE_COLUMN] == ROLE_PROJECTION, due].sum()
     configuration.log_check(STEP_LABEL, check_log, "the future USD due of the extract = Σ USD due of the forecast's extract rows",
-                            abs(future_due - forecast.loc[forecast[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL, due].sum()) <= MONEY_TOLERANCE,
+                            abs(future_due - forecast.loc[forecast[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL, due].sum()) <= configuration.money_tolerance,
                             failure_detail=f"${future_due:,.0f} vs ${forecast.loc[forecast[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL, due].sum():,.0f}",
                             context=f"${future_due:,.0f} (the extended horizon adds its own pipeline)")
 
@@ -104,15 +101,15 @@ def validate_chain(raw: pd.DataFrame, results: dict, configuration: Config) -> p
     past_rate = last_year_rows[configuration.renewed_usd_col].sum() / last_year_rows[due].sum()
     extract_rows = forecast[forecast[PIPELINE_ORIGIN_COLUMN] == PIPELINE_REAL]
     future_rate = extract_rows["esperado_usd"].sum() / extract_rows[due].sum()
-    configuration.log_check(STEP_LABEL, check_log, f"the expected rate of the future is within ±{MAX_RATE_JUMP_PP:.0f} pp of {last_year}'s",
-                            abs(future_rate - past_rate) * 100 <= MAX_RATE_JUMP_PP,
+    configuration.log_check(STEP_LABEL, check_log, f"the expected rate of the future is within ±{configuration.max_rate_jump_pp:.0f} pp of {last_year}'s",
+                            abs(future_rate - past_rate) * 100 <= configuration.max_rate_jump_pp,
                             failure_detail=f"future {future_rate:.1%} vs {last_year} {past_rate:.1%}: explain the jump",
                             context=f"future {future_rate:.1%} (USD, uplift included) vs {last_year} {past_rate:.1%}", blocking=False)
     exam = results.get("portfolio_exam")
     exam_error = (exam["framework_error_total"].abs().max() if exam is not None
                   else results["backtest"]["exam_total"]["elegida_error_pct"].abs().max())
-    configuration.log_check(STEP_LABEL, check_log, f"the error of the total renewals in the exam is within ±{MAX_EXAM_TOTAL_ERROR:.0%}",
-                            exam_error <= MAX_EXAM_TOTAL_ERROR,
+    configuration.log_check(STEP_LABEL, check_log, f"the error of the total renewals in the exam is within ±{configuration.max_exam_total_error:.0%}",
+                            exam_error <= configuration.max_exam_total_error,
                             failure_detail=f"the worst month misses by {exam_error:.1%}", context=f"worst month {exam_error:.1%}",
                             blocking=False)
 

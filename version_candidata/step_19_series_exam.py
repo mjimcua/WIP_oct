@@ -78,8 +78,6 @@ STEP_OUTPUT = ("every prediction of every forecast series, traced · the exam pe
                "per month · tables sff_series_exam_detail, sff_series_exam, sff_examen_cartera, sff_examen_cartera_resumen")
 
 METHOD_RAW = "raw"
-MIN_MONTHS_TO_PREDICT = 3          # fewer own months: the raw method takes its own level
-UNITS_TOLERANCE = 1e-6
 
 
 def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, pool_series: pd.DataFrame,
@@ -155,13 +153,13 @@ def examine_series(rated_units: pd.DataFrame, series_estimate: pd.DataFrame, poo
                             failure_detail=f"rows per method {per_method.to_dict()} for {expected_rows:,}",
                             context=f"{len(methods)} methods × {expected_rows:,}")
     real_total = real[renewed].sum() * len(configuration.backtest_horizons)
-    adds_up = all(abs(detail.loc[detail["method"] == method, "real_units"].sum() - real_total) <= UNITS_TOLERANCE for method in methods)
+    adds_up = all(abs(detail.loc[detail["method"] == method, "real_units"].sum() - real_total) <= configuration.units_tolerance for method in methods)
     configuration.log_check(STEP_LABEL, check_log, "the real renewals of the exam equal the renewals of the exam months (nothing counted twice)",
                             adds_up, failure_detail="a method lost or duplicated renewals",
                             context=f"{real[renewed].sum():,.0f} renewed units in the exam months")
     framework = detail[detail["method"] == METHOD_FRAMEWORK]
     consistent = (int(per_series["framework_predictions"].sum()) == len(framework)
-                  and abs(per_series["framework_real_units"].sum() - framework["real_units"].sum()) <= UNITS_TOLERANCE)
+                  and abs(per_series["framework_real_units"].sum() - framework["real_units"].sum()) <= configuration.units_tolerance)
     configuration.log_check(STEP_LABEL, check_log, "the summary per series adds up to the detail (counts and units)", consistent,
                             failure_detail="sff_series_exam does not add up to sff_series_exam_detail")
 
@@ -221,7 +219,7 @@ def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_ind
     for composition_id in sorted(set(month_rows[COMPOSITION_ID_COLUMN].dropna())):
         entry = composition_index.get(composition_id)
         months_at_origin = months_known(entry, origin) if entry is not None else 0
-        if months_at_origin < MIN_MONTHS_TO_PREDICT:
+        if months_at_origin < configuration.exam_min_months_to_predict:
             continue
         technique = decision.get((composition_id, band_name), configuration.challenger_technique)
         technique, rate = predict_composition(entry["rate_logit"][:months_at_origin], entry["month"][:months_at_origin],
@@ -252,7 +250,7 @@ def predict_month(month_rows: pd.DataFrame, known: pd.DataFrame, composition_ind
         if months_at_origin == 0:
             continue                                  # no own month yet: the cell level, below (fillna)
         composition_id = composition_of.get(series_id)
-        if months_at_origin < MIN_MONTHS_TO_PREDICT:
+        if months_at_origin < configuration.exam_min_months_to_predict:
             own_rate[series_id] = entry["renewed"][:months_at_origin].sum() / entry["due"][:months_at_origin].sum()
             own_technique[series_id] = "own_level"
             continue

@@ -57,8 +57,6 @@ STEP_ACTIONS = ["the compositions of step 10 and every series in their rate (use
                 "show the ids by gate and the largest ones, as tables"]
 STEP_OUTPUT = "one row per id × closed month (units due, renewed, rate) · one row per id · tables sff_pool_serie, sff_pool_referencia"
 
-SUPPORT_TOLERANCE = 1e-9
-LARGEST_SHOWN = 5
 
 
 def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: pd.DataFrame,
@@ -107,7 +105,7 @@ def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: 
     support_in_step_10 = (ladder["groups"].drop_duplicates(COMPOSITION_ID_COLUMN)
                           .set_index(COMPOSITION_ID_COLUMN)["group_support"].rename("n_pool_paso_10"))
     compared = pool_reference.join(support_in_step_10, on=COMPOSITION_ID_COLUMN)
-    mismatched = compared[(compared["n_pool"] - compared["n_pool_paso_10"]).abs() > SUPPORT_TOLERANCE]
+    mismatched = compared[(compared["n_pool"] - compared["n_pool_paso_10"]).abs() > configuration.support_tolerance]
     configuration.log_check(STEP_LABEL, check_log, "the support of every group equals its support in step 10",
                             mismatched.empty,
                             failure_detail=f"{len(mismatched):,} groups whose support differs from step 10",
@@ -133,8 +131,8 @@ def build_pool_series(rated_units: pd.DataFrame, ladder: dict, series_estimate: 
                              .agg(ids=(COMPOSITION_ID_COLUMN, "size"), series_que_lo_usan=("series_que_lo_usan", "sum"),
                                   usd_por_predecir=("usd_por_predecir", "sum"), meses_mediana=("meses", "median"))
                              .reset_index())
-    configuration.logger.doc(f"[{STEP_LABEL}] the {LARGEST_SHOWN} groups with the most money to predict:")
-    configuration.show_table(pool_reference.nlargest(LARGEST_SHOWN, "usd_por_predecir"))
+    configuration.logger.doc(f"[{STEP_LABEL}] the {configuration.largest_series_shown} groups with the most money to predict:")
+    configuration.show_table(pool_reference.nlargest(configuration.largest_series_shown, "usd_por_predecir"))
     return pool_series, pool_reference
 
 

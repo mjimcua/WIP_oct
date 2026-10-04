@@ -2,15 +2,14 @@
 test_step_22.py — The adaptation to Power BI: the price increase monitor.
 
 A · the monitor over the synthetic: columns, the exact base, no false flags
-B · the detection over a hand-made core: a step is flagged and its cycle lasts CYCLE_MONTHS
+B · the detection over a hand-made core: a step is flagged and its cycle lasts synthetic_with().price_cycle_months
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
 import numpy as np
 import pandas as pd
 
-from step_22_power_bi import (CYCLE_MONTHS, MIN_REFERENCE_MONTHS, PERSISTENCE_MONTHS, PRICE_STEP_THRESHOLD,
-                               price_increase_monitor)
+from step_22_power_bi import price_increase_monitor
 from test_helpers import check, console_of, finish, synthetic_with
 from main import run
 from config import (CORE_ISOLATED_BAND_PREFIX, CORE_ISOLATED_RENEWED_PIPELINE_USD, CORE_ISOLATED_RENEWED_UNITS,
@@ -41,7 +40,7 @@ def test_the_monitor_over_the_synthetic() -> None:
 
 
 def test_the_detection_over_a_hand_made_core() -> None:
-    print("B · the detection: a +5 % step is flagged and its cycle lasts exactly CYCLE_MONTHS")
+    print("B · the detection: a +5 % step is flagged and its cycle lasts exactly synthetic_with().price_cycle_months")
     months = pd.period_range("2023-01", periods=36, freq="M")
     step_starts = pd.Period("2025-01", freq="M")                     # month 25: well past the reference window
     rows = []
@@ -54,14 +53,14 @@ def test_the_detection_over_a_hand_made_core() -> None:
     monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with())
     check(monitor.attrs["detector_series"] == "uplift" and monitor["uplift_isolated"].isna().all(),
           "without the isolated renewals the detector falls back to the plain uplift, and says so")
-    check(monitor["uplift_previous_12"].isna().sum() == MIN_REFERENCE_MONTHS,
+    check(monitor["uplift_previous_12"].isna().sum() == synthetic_with().price_min_reference_months,
           "the first months have no reference yet (fewer than the minimum of previous months)")
     first_flagged = monitor[monitor["price_increase_flag"] == 1]["period"].iloc[0]
     check(first_flagged == step_starts, "the step is flagged in its first month")
     in_cycle = monitor[monitor["in_increase_cycle"] == 1]["period"]
-    check(len(in_cycle) == CYCLE_MONTHS and in_cycle.iloc[0] == step_starts,
-          f"the cycle lasts exactly {CYCLE_MONTHS} months from the flagged step")
-    after_cycle = monitor[monitor["period"] >= step_starts + CYCLE_MONTHS]
+    check(len(in_cycle) == synthetic_with().price_cycle_months and in_cycle.iloc[0] == step_starts,
+          f"the cycle lasts exactly {synthetic_with().price_cycle_months} months from the flagged step")
+    after_cycle = monitor[monitor["period"] >= step_starts + synthetic_with().price_cycle_months]
     check((after_cycle["in_increase_cycle"] == 0).all(),
           "one cycle later everyone due already bought at the new tariff: the cycle is over")
     check(float(monitor.loc[monitor["period"] == step_starts, "uplift_step"].round(3).iloc[0]) == 0.05,
@@ -74,7 +73,7 @@ def test_the_detection_over_a_hand_made_core() -> None:
     spike = noisy_monitor[noisy_monitor["period"] == spike_month].iloc[0]
     check(spike["above_threshold"] == 1 and spike["price_increase_flag"] == 0
           and noisy_monitor.loc[noisy_monitor["period"] < step_starts, "in_increase_cycle"].sum() == 0,
-          f"a single month above the threshold is not an increase (it needs {PERSISTENCE_MONTHS} in a row): no false cycle")
+          f"a single month above the threshold is not an increase (it needs {synthetic_with().price_persistence_months} in a row): no false cycle")
 
 
 def test_the_dispersion_of_the_isolated_renewals() -> None:
@@ -119,9 +118,34 @@ def test_each_isolated_metric_needs_only_its_columns() -> None:
           "the metrics that need the isolated units due stay empty, and nothing else does")
 
 
+def test_every_parameter_is_in_the_config() -> None:
+    print("E · every parameter is in the Config, documented with the steps that read it")
+    import glob
+    import re as regex
+    from config import parameter_table
+    table = parameter_table(synthetic_with())
+    documented = table[table["pasos_documentados"] != ""]
+    undocumented = table[table["pasos_documentados"] == ""]["parametro"].tolist()
+    disagree = documented[documented.apply(lambda row: set(row["pasos_documentados"].replace("—", "").split())
+                                           != set(row["pasos"].split()), axis=1)]
+    check(not undocumented, f"every field of the Config documents its steps in its comment ([..]); without: {undocumented}")
+    check(disagree.empty,
+          f"the steps documented next to every parameter ([..]) are the steps whose code reads it "
+          f"({len(documented)} parameters · disagree: {disagree['parametro'].tolist()})")
+    definitions = {"PERCENTAGE_POINTS", "MONTHS_PER_YEAR", "MONTHS_PER_CYCLE", "WORST_CASE_PROPORTION_VARIANCE", "CHAPTER_COUNT"}
+    stray = []
+    for module in sorted(glob.glob("step_*.py")) + ["prediction.py", "techniques.py"]:
+        for number, line in enumerate(open(module, encoding="utf-8"), start=1):
+            match = regex.match(r"^([A-Z][A-Z0-9_]+)\s*(?:,\s*[A-Z][A-Z0-9_]+\s*)*=\s*-?[0-9.]", line)
+            if match and match.group(1) not in definitions:
+                stray.append(f"{module}:{number} {match.group(1)}")
+    check(not stray, f"no named number outside the Config but the definitions {sorted(definitions)} (found: {stray})")
+
+
 if __name__ == "__main__":
     test_the_monitor_over_the_synthetic()
     test_the_detection_over_a_hand_made_core()
     test_each_isolated_metric_needs_only_its_columns()
     test_the_dispersion_of_the_isolated_renewals()
+    test_every_parameter_is_in_the_config()
     finish()

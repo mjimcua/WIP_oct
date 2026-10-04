@@ -53,7 +53,6 @@ STEP_OUTPUT = "one row per forecast unit with se_pp_max, moe_pp_max, moe_usd_max
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 WORST_CASE_PROPORTION_VARIANCE = 0.25     # p (1 − p) at p = 0.5: the largest a binomial variance can be
-MIN_SUPPORT_UNITS = 1                     # a unit with nothing due is bounded as if it had one contract
 PERCENTAGE_POINTS = 100
 
 
@@ -66,8 +65,8 @@ def build_support_bound(forecast_units: pd.DataFrame, configuration: Config) -> 
     support_bound = forecast_units[[UNIT_ID_COLUMN, UNIT_KEY_COLUMN, SERIES_KEY_COLUMN, configuration.period_col,
                                     CALENDAR_ROLE_COLUMN, configuration.pipeline_units_col,
                                     configuration.pipeline_usd_col]].copy()
-    support_units = support_bound[configuration.pipeline_units_col].clip(lower=MIN_SUPPORT_UNITS)
-    units_counted_as_one = int((support_bound[configuration.pipeline_units_col] < MIN_SUPPORT_UNITS).sum())
+    support_units = support_bound[configuration.pipeline_units_col].clip(lower=configuration.min_support_units)
+    units_counted_as_one = int((support_bound[configuration.pipeline_units_col] < configuration.min_support_units).sum())
     configuration.log_action(STEP_LABEL, 1, f"support of {len(support_bound):,} units; {units_counted_as_one:,} with "
                                             f"nothing due counted as 1")
 

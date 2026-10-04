@@ -94,7 +94,6 @@ STEP_OUTPUT = ("predictions (id × target × horizon × technique) · the chosen
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 PERCENTAGE_POINTS = 100
-MIN_EXAM_COVERAGE = 0.80
 SUPPORT_ORIGIN = "sin_soporte"      # an id below the floor: not judged, it takes the challenger
 PREDICTION_COLUMNS = [COMPOSITION_ID_COLUMN, "proposito", "mes_objetivo", "h", "origen", "ultimo_mes_visto", "tecnica",
                       "tasa_pred", "tasa_real", "vencen_real", "err_pp", "se_binom_pp", "err_norm"]
@@ -385,8 +384,8 @@ def check_backtest(predictions: pd.DataFrame, decision: pd.DataFrame, pool_refer
     coverage = float(exam_rows["dentro_banda"].mean()) if len(exam_rows) else np.nan
     nominal = configuration.band_high_quantile - configuration.band_low_quantile
     configuration.log_check(STEP_LABEL, check_log,
-                            f"in the exam, the band holds at least {MIN_EXAM_COVERAGE:.0%} of the chosen technique's errors",
-                            bool(coverage >= MIN_EXAM_COVERAGE),
+                            f"in the exam, the band holds at least {configuration.min_exam_coverage:.0%} of the chosen technique's errors",
+                            bool(coverage >= configuration.min_exam_coverage),
                             failure_detail=f"only {coverage:.0%} inside (nominal {nominal:.0%}): the band is too narrow",
                             context=f"{coverage:.0%} inside (nominal {nominal:.0%}, {len(exam_rows):,} exam predictions)",
                             blocking=False)

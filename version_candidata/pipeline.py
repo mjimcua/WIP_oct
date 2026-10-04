@@ -51,7 +51,9 @@ from typing import Callable
 
 import pandas as pd
 
-from config import Config
+import prediction
+import techniques
+from config import Config, parameter_table
 from step_00_validate_raw import validate_raw
 from step_01_values_and_levels import validate_values_and_build_levels
 from step_02_apply_calendar import apply_calendar
@@ -140,7 +142,9 @@ def contracts(configuration: Config) -> dict:
                                    ("source_label", "source_block", "source_order"), part="pipeline_source"),
                      TableContract("power_bi.price_monitor", "closed pipeline month", ("period",),
                                    ("uplift", "uplift_step", "price_increase_flag", "in_increase_cycle"),
-                                   part="price_monitor")],
+                                   part="price_monitor"),
+                     TableContract("power_bi.parameters", "parameter of the Config", ("parametro",),
+                                   ("valor", "por_defecto", "cambiado", "pasos"), part="parameters")],
     }
 
 
@@ -201,6 +205,9 @@ class Orchestrator:
 
     def __init__(self, configuration: Config, steps: list = None):
         self.configuration = configuration
+        # the parameters of the techniques and of the prediction are read from this run's Config
+        techniques.apply_configuration(configuration)
+        prediction.apply_configuration(configuration)
         self.steps = {step.name: step for step in (steps or sff_steps())}
         self.order = dependency_order(list(self.steps.values()))
         self.table_contracts = contracts(configuration)
@@ -210,11 +217,22 @@ class Orchestrator:
         self.manifest_path = os.path.join(self.folder, "checkpoint_manifest.json")
         self.seconds = {}                                  # how long every step took in this run
 
+    def log_changed_parameters(self) -> None:
+        """At the start of a run: the parameters with a value of this run (not the Config's default), each with
+        the steps that read it. The whole table, with every parameter, is written by step 22 (sff_parametros)."""
+        parameters = parameter_table(self.configuration)
+        changed = parameters[parameters["cambiado"] == 1]
+        self.configuration.logger.doc(f"[ORQ] {len(parameters)} parameters in the Config · {len(changed)} with a value of this "
+                                      f"run (the rest keep their default; all of them in step 22, sff_parametros):")
+        for _, row in changed.iterrows():
+            self.configuration.logger.doc(f"[ORQ]   {row['parametro']} = {row['valor']}   · steps {row['pasos'] or '—'}")
+
     def run(self) -> dict:
         """Every step, in the order of their dependencies; the results under their usual names.
         A full run starts a new checkpoint (the Config it runs with is recorded)."""
         if self.configuration.save_checkpoints:
             self.start_checkpoint()
+        self.log_changed_parameters()
         for step_name in self.order:
             self.run_step(step_name)
         self.show_timings()

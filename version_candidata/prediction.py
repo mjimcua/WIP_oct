@@ -25,9 +25,18 @@ Every function returns its intermediate values too, so a prediction can be trace
 import numpy as np
 import pandas as pd
 
+from config import Config
+
 from techniques import inverse_logit, logit, predict_logit
 
-LEVEL_CLIP = 1e-6          # a level of exactly 0 or 1 has no logit: it is clipped before the shift
+# the level clip lives in the Config (level_clip); the orchestrator hands it over before any step runs,
+# until then it holds the Config's default
+parameters = {"level_clip": Config.__dataclass_fields__["level_clip"].default}
+
+
+def apply_configuration(configuration: Config) -> None:
+    """The prediction parameters of this run, from its Config."""
+    parameters["level_clip"] = configuration.level_clip
 
 
 def predict_composition(history_logit: np.ndarray, calendar_months: np.ndarray, technique: str, horizon: int,
@@ -50,8 +59,8 @@ def credibility_shift(z, reference_level, composition_level, apply: bool = True)
         & (reference > 0) & (reference < 1) & (composition > 0) & (composition < 1)
     if not apply:
         return np.zeros(len(z))
-    reference = np.clip(np.where(valid, reference, 0.5), LEVEL_CLIP, 1 - LEVEL_CLIP)
-    composition = np.clip(np.where(valid, composition, 0.5), LEVEL_CLIP, 1 - LEVEL_CLIP)
+    reference = np.clip(np.where(valid, reference, 0.5), parameters["level_clip"], 1 - parameters["level_clip"])
+    composition = np.clip(np.where(valid, composition, 0.5), parameters["level_clip"], 1 - parameters["level_clip"])
     return np.where(valid, (1 - z) * (logit(reference) - logit(composition)), 0.0)
 
 
@@ -61,7 +70,7 @@ def shifted_rate(composition_rate, z, reference_level, composition_level, apply:
     only a shifted rate goes through the logit scale."""
     shift = credibility_shift(z, reference_level, composition_level, apply)
     composition_rate = np.asarray(pd.Series(composition_rate), dtype=float)
-    moved = inverse_logit(logit(np.clip(np.nan_to_num(composition_rate, nan=0.5), LEVEL_CLIP, 1 - LEVEL_CLIP)) + shift)
+    moved = inverse_logit(logit(np.clip(np.nan_to_num(composition_rate, nan=0.5), parameters["level_clip"], 1 - parameters["level_clip"])) + shift)
     rate = np.where(shift != 0, moved, composition_rate)
     return rate, shift
 

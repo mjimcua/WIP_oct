@@ -71,7 +71,6 @@ WHAT_IT_IS = {ORIGIN_GAP: "added (step 08): a month with nothing due inside the 
               ORIGIN_WIPED_PIPELINE: "wiped (step 02): partial pipeline of 1-year licences, half built by sales and renewals that have only started",
               PIPELINE_PROJECTED: "created (step 17): expected renewal of a 1-year licence due in the window, 12 months later",
               PIPELINE_SIMULATED: "created (step 17): acquisition simulated in the window, due 12 months later"}
-UNITS_TOLERANCE = 1e-6
 
 
 def count_the_new_rows(fine_table: pd.DataFrame, rated_units: pd.DataFrame, forecast_rows: pd.DataFrame,
@@ -100,7 +99,7 @@ def count_the_new_rows(fine_table: pd.DataFrame, rated_units: pd.DataFrame, fore
     parts.append(summarise(wiped_result, ORIGIN_WIPED_RESULT, period,
                            units=wiped_result[S0_RENEWED_UNITS_COLUMN].fillna(0) - wiped_result[configuration.renewed_units_col].fillna(0),
                            usd=wiped_result[S0_RENEWED_USD_COLUMN].fillna(0) - wiped_result[configuration.renewed_usd_col].fillna(0)))
-    wiped_pipeline = fine_table[fine_table[S0_PIPELINE_UNITS_COLUMN] > fine_table[due_units] + UNITS_TOLERANCE]
+    wiped_pipeline = fine_table[fine_table[S0_PIPELINE_UNITS_COLUMN] > fine_table[due_units] + configuration.units_tolerance]
     parts.append(summarise(wiped_pipeline, ORIGIN_WIPED_PIPELINE, period,
                            units=wiped_pipeline[S0_PIPELINE_UNITS_COLUMN] - wiped_pipeline[due_units],
                            usd=wiped_pipeline[S0_PIPELINE_USD_COLUMN] - wiped_pipeline[due_usd]))
@@ -131,8 +130,8 @@ def count_the_new_rows(fine_table: pd.DataFrame, rated_units: pd.DataFrame, fore
     raw_units, raw_usd = float(fine_table[S0_PIPELINE_UNITS_COLUMN].sum()), float(fine_table[S0_PIPELINE_USD_COLUMN].sum())
     kept_units, kept_usd = float(fine_table[due_units].sum()), float(fine_table[due_usd].sum())
     wiped = table[table["origen"] == ORIGIN_WIPED_PIPELINE]
-    reconciles = (abs(raw_units - kept_units - wiped["unidades"].sum()) <= UNITS_TOLERANCE * max(raw_units, 1)
-                  and abs(raw_usd - kept_usd - wiped["usd"].sum()) <= UNITS_TOLERANCE * max(raw_usd, 1))
+    reconciles = (abs(raw_units - kept_units - wiped["unidades"].sum()) <= configuration.units_tolerance * max(raw_units, 1)
+                  and abs(raw_usd - kept_usd - wiped["usd"].sum()) <= configuration.units_tolerance * max(raw_usd, 1))
     configuration.log_check(STEP_LABEL, check_log, "what the raw had due = what stays due + the partial pipeline wiped (units and USD)",
                             reconciles, failure_detail="the wiped pipeline does not explain the difference with the raw",
                             context=f"raw {raw_units:,.0f} units · ${raw_usd:,.0f} = kept {kept_units:,.0f} · ${kept_usd:,.0f} "

@@ -110,6 +110,14 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 ## Renovaciones proyectadas = retención (4-oct-2026)
 - La renovación proyectada de una adquisición vence al año siguiente como retención (`renewed_acquisition_value` = Retention_Not-New), con `prev_OperationGroup` = Renewal (`dims_after_renewal`) y marcas timevarying neutras. Antes heredaba Acquisition_* y la marca de la fila que vencía: inflaba la vista de adquisición de sep-dic del año siguiente y se predecía con la tasa de primera renovación.
 
+## Todos los parámetros en la Config (4-oct-2026)
+- Los ~65 números que decidían algo dentro de los pasos y de las técnicas pasan a la Config, con los mismos valores (67 tablas idénticas bit a bit). Cada campo documenta en su comentario los pasos que lo leen ([..]); un test lo contrasta con el código y otro impide números con nombre fuera de la Config. Tabla `sff_parametros` en el paso 22.
+- Borrados `close_relative_max_rung` y `contract_apply_realization_ratio`: ningún paso los leía.
+
+## Reparto de las marcas timevarying (4-oct-2026)
+- El forecast predice ya, además de la tasa y la revalorización, la proporción de las marcas negativas que llegarán antes de vencer (softcancel, dormant, not_installed): el reparto (acción 7 del paso 17) mueve unidades de neutral a cada combinación marcada hasta la mezcla histórica del mismo mes, por grupo (todas las dimensiones salvo las timevarying), con recurso a la celda mandatory y a la cartera. Una marca solo crece (el extracto guarda el último estado). Sin backtest: la técnica es la del mismo mes del año anterior, como la adquisición; se sustituirá por modelos predictivos.
+- A pensar: unificar en un solo componente las proyecciones "mismo mes de la historia × nivel" (adquisición simulada, universo time_series, reparto de marcas), que hoy son tres implementaciones de la misma técnica.
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

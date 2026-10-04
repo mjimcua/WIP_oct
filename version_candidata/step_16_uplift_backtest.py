@@ -86,7 +86,7 @@ def backtest_uplift(fine_table: pd.DataFrame, configuration: Config) -> tuple:
         cells.set_index(UPLIFT_CELL_ID_COLUMN)["uplift"])
     discount = configuration.discount_value_column
     known = exam_rows[discount].notna() if discount else pd.Series(False, index=exam_rows.index)
-    exam_rows["pred_" + PATH_CONTRACT] = np.where(known, forecast_base / (1 - exam_rows[discount].clip(upper=0.99))
+    exam_rows["pred_" + PATH_CONTRACT] = np.where(known, forecast_base / (1 - exam_rows[discount].clip(upper=configuration.contract_discount_cap))
                                                   if discount else np.nan, np.nan)
     configuration.log_action(STEP_LABEL, 2, f"{len(exam_rows):,} renewer rows in the exam; {int(known.sum()):,} with a known discount")
 

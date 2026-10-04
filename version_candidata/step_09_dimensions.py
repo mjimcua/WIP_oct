@@ -73,11 +73,9 @@ STEP_OUTPUT = ("one row per dimension (η², unique contribution, ω², collapse
                "tables sff_decision_eta2, sff_decision_eta2_pares")
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-MIN_SERIES_IN_BASE = 3          # with fewer series every figure is 0: no evidence, declared
 VALUE_COLUMN = "tasa_propia"
 WEIGHT_COLUMN = "n_propio"
 LEVEL_MARK = "_level_"          # the naming of a hierarchy: product_level_1 ⊂ product_level_2
-FIGURE_DECIMALS = 4
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════
@@ -116,10 +114,10 @@ def weighted_omega2(frame: pd.DataFrame, group_column: str) -> float:
     return float(max(0.0, (between - (value_count - 1) * mean_square_within) / (total + mean_square_within)))
 
 
-def weighted_r2(frame: pd.DataFrame, dimensions: list) -> float:
+def weighted_r2(frame: pd.DataFrame, dimensions: list, min_series: int) -> float:
     """R² of a weighted least-squares fit of the rate on the dimensions as categories
     (additive model). A design with redundant columns is solved by lstsq."""
-    if not dimensions or len(frame) < MIN_SERIES_IN_BASE:
+    if not dimensions or len(frame) < min_series:
         return 0.0
     design = pd.get_dummies(frame[dimensions].astype(str), drop_first=True).astype(float)
     design.insert(0, "intercept", 1.0)
@@ -146,14 +144,14 @@ def family_and_level(dimension_name: str, dimensions=()) -> tuple:
     return dimension_name, (max(coarser) + 1 if coarser else 1)
 
 
-def sequential_collapse_order(base: pd.DataFrame, mandatory_dims: list) -> list:
+def sequential_collapse_order(base: pd.DataFrame, mandatory_dims: list, configuration: Config) -> list:
     """The collapse order of the mandatory dims, greedy and sequential: at every round, among
     the droppable dims (a *_level_N only when no *_level_(N+1) remains), drop the one whose
     removal from the dims that REMAIN loses the least R². Returns [(dim, loss), ...] from
     the first to collapse to the last; ties go to the name, so the order is reproducible."""
     remaining = list(mandatory_dims)
     collapse_order = []
-    current_r2 = weighted_r2(base, remaining)
+    current_r2 = weighted_r2(base, remaining, configuration.dimension_min_series)
     while remaining:
         droppable = [dimension for dimension in remaining
                      if not any(family_and_level(other, remaining)
@@ -161,12 +159,12 @@ def sequential_collapse_order(base: pd.DataFrame, mandatory_dims: list) -> list:
                                 for other in remaining)]
         losses = {}
         for dimension in droppable:
-            r2_without = weighted_r2(base, [other for other in remaining if other != dimension])
+            r2_without = weighted_r2(base, [other for other in remaining if other != dimension], configuration.dimension_min_series)
             losses[dimension] = max(0.0, current_r2 - r2_without)
         next_dimension = min(droppable, key=lambda dimension: (losses[dimension], dimension))
-        collapse_order.append((next_dimension, round(losses[next_dimension], FIGURE_DECIMALS)))
+        collapse_order.append((next_dimension, round(losses[next_dimension], configuration.dimension_figure_decimals)))
         remaining.remove(next_dimension)
-        current_r2 = weighted_r2(base, remaining)
+        current_r2 = weighted_r2(base, remaining, configuration.dimension_min_series)
     return collapse_order
 
 
@@ -189,20 +187,20 @@ def analyse_dimensions(series_rate: pd.DataFrame, series_lookup: pd.DataFrame, c
     configuration.log_action(STEP_LABEL, 1, f"base: {len(base):,} series (predecible, own rate, neutro), "
                                             f"{base['usd_por_predecir'].sum() / predictable_usd if predictable_usd else 0:.0%} "
                                             f"of the money of the predictable series")
-    has_evidence = len(base) >= MIN_SERIES_IN_BASE
+    has_evidence = len(base) >= configuration.dimension_min_series
 
     # [2] the three figures of every dimension
-    r2_all = weighted_r2(base, dimensions)
+    r2_all = weighted_r2(base, dimensions, configuration.dimension_min_series)
     dimension_rows = []
     for dimension in dimensions:
         dimension_rows.append({
             "dimension": dimension,
             "grupo": "mandatory" if dimension in mandatory_dims else "extra_renovacion",
             "valores": int(base[dimension].nunique()) if has_evidence else 0,
-            "eta2_individual": round(weighted_eta2(base, dimension), FIGURE_DECIMALS) if has_evidence else 0.0,
-            "contribucion_unica": round(max(0.0, r2_all - weighted_r2(base, [other for other in dimensions if other != dimension])),
-                                        FIGURE_DECIMALS) if has_evidence else 0.0,
-            "omega2": round(weighted_omega2(base, dimension), FIGURE_DECIMALS) if has_evidence else 0.0,
+            "eta2_individual": round(weighted_eta2(base, dimension), configuration.dimension_figure_decimals) if has_evidence else 0.0,
+            "contribucion_unica": round(max(0.0, r2_all - weighted_r2(base, [other for other in dimensions if other != dimension], configuration.dimension_min_series)),
+                                        configuration.dimension_figure_decimals) if has_evidence else 0.0,
+            "omega2": round(weighted_omega2(base, dimension), configuration.dimension_figure_decimals) if has_evidence else 0.0,
             "anulable": int(dimension in configuration.extra_renovacion)})
     decision = pd.DataFrame(dimension_rows)
     configuration.log_action(STEP_LABEL, 2, f"{len(dimensions)} dimensions measured; R² of all of them together "
@@ -214,7 +212,8 @@ def analyse_dimensions(series_rate: pd.DataFrame, series_lookup: pd.DataFrame, c
     without_variation = [dimension for dimension in mandatory_dims if base[dimension].nunique() <= 1]
     if without_variation:
         configuration.log_action(STEP_LABEL, 3, f"no variation, not a pass of the ladder: {without_variation}")
-    collapse_order = sequential_collapse_order(base, [dimension for dimension in mandatory_dims if dimension not in without_variation])
+    collapse_order = sequential_collapse_order(base, [dimension for dimension in mandatory_dims if dimension not in without_variation],
+                                               configuration)
     position_of = {dimension: position for position, (dimension, _) in enumerate(collapse_order, 1)}
     loss_of = dict(collapse_order)
     decision["orden_colapso"] = decision["dimension"].map(position_of).fillna(0).astype(int)
@@ -263,9 +262,9 @@ def dimension_pairs(base: pd.DataFrame, decision: pd.DataFrame, dimensions: list
         joint = base.assign(_pair=base[first_dimension].astype(str) + "|" + base[second_dimension].astype(str))
         pair_eta2 = weighted_eta2(joint, "_pair")
         pair_rows.append({"par": f"{first_dimension}×{second_dimension}",
-                          "eta2_par": round(pair_eta2, FIGURE_DECIMALS),
+                          "eta2_par": round(pair_eta2, configuration.dimension_figure_decimals),
                           "interaccion": round(pair_eta2 - max(individual[first_dimension], individual[second_dimension]),
-                                               FIGURE_DECIMALS)})
+                                               configuration.dimension_figure_decimals)})
     pairs = pd.DataFrame(pair_rows, columns=pair_columns)
     return (pairs.sort_values("interaccion", ascending=False).head(configuration.dimension_pairs_shown)
             .reset_index(drop=True))
@@ -275,8 +274,8 @@ def check_dimensions(base: pd.DataFrame, decision: pd.DataFrame, collapse_order:
                      check_log: list) -> None:
     """Checks 1 to 4."""
     # [1] enough series to measure anything
-    configuration.log_check(STEP_LABEL, check_log, f"the base has at least {MIN_SERIES_IN_BASE} series",
-                            len(base) >= MIN_SERIES_IN_BASE,
+    configuration.log_check(STEP_LABEL, check_log, f"the base has at least {configuration.dimension_min_series} series",
+                            len(base) >= configuration.dimension_min_series,
                             failure_detail=f"only {len(base)} series: every figure is 0 and the collapse order is by name",
                             context=f"{len(base):,} series", blocking=False)
 

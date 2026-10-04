@@ -86,8 +86,6 @@ LEVEL_ROW, LEVEL_UNIT, LEVEL_SERIES = "fila", "unidad", "serie"
 AGGREGATE_SUM = "SUM"
 AGGREGATE_ATTRIBUTE = "no sumar: atributo repetido; con una serie o unidad seleccionada, MAX"
 AGGREGATE_SLICER = "segmentar / filtrar"
-MONEY_TOLERANCE = 0.01
-MONTHS_SHOWN = 6
 
 # The measure columns of the core: (core name, step, description). The raw measures are as
 # the extract had them; the step-02 renewals are the ones the framework learns from.
@@ -117,8 +115,12 @@ ROW_VALUES_STEP_17 = [(PIPELINE_ORIGIN_COLUMN, "s17_origen_pipeline", "17", "rea
                       ("esperado_usd", "s17_esperado_usd", "17", "expected renewed USD (SUM)"),
                       ("esperado_usd_bajo", "s17_esperado_usd_bajo", "17", "low end of the row's USD band (SUM = the worst case of a total)"),
                       ("esperado_usd_alto", "s17_esperado_usd_alto", "17", "high end of the row's USD band (SUM = the worst case of a total)"),
-                      ("maduracion_l", "s17_maduracion_l", "17", "share of the row's unmarked units expected to be marked "
-                                                                 "(maturation_flag_col) before falling due"),
+                      ("esperado_unidades_base", "s17_esperado_unidades_base", "17",
+                       "expected renewed units with TODAY's marks, before the distribution of the marks still to come (SUM)"),
+                      ("esperado_usd_base", "s17_esperado_usd_base", "17",
+                       "expected USD with TODAY's marks, before the distribution of the marks still to come (SUM)"),
+                      ("maduracion_l", "s17_maduracion_l", "17", "share of the row's units (a neutral row) that move to a "
+                                                                 "marked combination before falling due"),
                       ("maduracion_unidades_migran", "s17_maduracion_unidades_migran", "17",
                        "units of the row expected to be marked before falling due (SUM)"),
                       ("maduracion_delta_unidades", "s17_maduracion_delta_unidades", "17",
@@ -428,12 +430,12 @@ FINAL_VALUES = [
     ("forecast_renewed_USD_low", "forecast_renewed_USD_low", "FIN", "low end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
     ("forecast_renewed_USD_high", "forecast_renewed_USD_high", "FIN", "high end of the row's band (SUM = the worst case of a total; real rows: the real value)"),
     ("forecast_maturation_units_moved", "forecast_maturation_units_moved", "FIN",
-     "units expected to be marked (softcancel) before falling due: they leave the unmarked side for the marked one · SUM"),
+     "units expected to take a negative mark (softcancel, dormant…) before falling due: they leave the neutral side · SUM"),
     ("forecast_renewed_units_maturation_adj", "forecast_renewed_units_maturation_adj", "FIN",
-     "the maturation adjustment of the renewed units, next to forecast_renewed_units (0 where nothing is adjusted) · SUM"),
+     "the part of forecast_renewed_units due to the marks still to come (already IN it; 0 where nothing moved) · SUM"),
     ("forecast_renewed_USD_maturation_adj", "forecast_renewed_USD_maturation_adj", "FIN",
-     "the maturation adjustment of the renewed USD, next to forecast_renewed_USD: forecast + adjustment = the "
-     "forecast with the marks expected at due date · SUM")]
+     "the part of forecast_renewed_USD due to the marks still to come (already IN it): forecast − this = the "
+     "forecast with today's marks · SUM")]
 FINAL_SUMMABLE = {"forecast_to_renew_units", "forecast_to_renew_USD", "forecast_renewed_units", "forecast_renewed_USD", "forecast_renewed_USD_low",
                   "forecast_renewed_USD_high", "forecast_maturation_units_moved", "forecast_renewed_units_maturation_adj",
                   "forecast_renewed_USD_maturation_adj"}
@@ -516,9 +518,9 @@ def add_final_block(core: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     core["forecast_renewed_USD_low"] = np.where(with_band, column("s17_esperado_usd_bajo"), core["forecast_renewed_USD"])
     core["forecast_renewed_USD_high"] = np.where(with_band, column("s17_esperado_usd_alto"), core["forecast_renewed_USD"])
     # the maturation adjustment: next to the forecast, only where step 17 adjusted (0 elsewhere)
-    core["forecast_maturation_units_moved"] = np.where(raw_future, column("s17_maduracion_unidades_migran"), 0.0)
-    core["forecast_renewed_units_maturation_adj"] = np.where(raw_future, column("s17_maduracion_delta_unidades"), 0.0)
-    core["forecast_renewed_USD_maturation_adj"] = np.where(raw_future, column("s17_maduracion_delta_usd"), 0.0)
+    core["forecast_maturation_units_moved"] = np.where(raw_future | extended, column("s17_maduracion_unidades_migran"), 0.0)
+    core["forecast_renewed_units_maturation_adj"] = np.where(raw_future | extended, column("s17_maduracion_delta_unidades"), 0.0)
+    core["forecast_renewed_USD_maturation_adj"] = np.where(raw_future | extended, column("s17_maduracion_delta_usd"), 0.0)
     # the closed-month measures: observed, not predicted: only in the closed months of the extract
     for measure in configuration.closed_month_measures:
         core[measure.core_column] = np.where(raw_closed, column(measure.s02_column), np.nan)
@@ -646,6 +648,7 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
     row_names = {name for _, name, _, _ in ROW_VALUES_STEP_17}
     summable = {"s17_esperado_unidades", "s17_esperado_usd", "s17_esperado_usd_bajo", "s17_esperado_usd_alto",
                 "s17_vencen_unidades", "s17_vencen_usd", "s17_maduracion_unidades_migran", "s17_maduracion_delta_unidades",
+                "s17_esperado_unidades_base", "s17_esperado_usd_base",
                 "s17_maduracion_delta_usd"}
     for block_specs in blocks_present:
         for _, name, step, description in block_specs:
@@ -694,7 +697,7 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
                       "s00_renovadas_unidades": fine_table[S0_RENEWED_UNITS_COLUMN].sum(),
                       "s00_renovado_usd": fine_table[S0_RENEWED_USD_COLUMN].sum()}
     differences = {name: float(core.loc[pipeline_rows, name].sum() - total) for name, total in reconciliation.items()
-                   if abs(core.loc[pipeline_rows, name].sum() - total) > MONEY_TOLERANCE}
+                   if abs(core.loc[pipeline_rows, name].sum() - total) > configuration.money_tolerance}
     configuration.log_check(STEP_LABEL, check_log, "the money reconciles with the extract", not differences,
                             failure_detail=f"differences core − extract: {differences}",
                             context=f"${reconciliation['s00_vencen_usd']:,.0f} due · ${reconciliation['s00_renovado_usd']:,.0f} renewed")
@@ -729,8 +732,8 @@ def check_core(core: pd.DataFrame, fine_table: pd.DataFrame, gap_rows: pd.DataFr
     summed = core.groupby([FINAL_YEAR_COLUMN, FINAL_ORIGIN_COLUMN])[["forecast_to_renew_USD", "forecast_renewed_USD"]].sum()
     summed.index = summed.index.set_names(["ano", "origen"])
     compared = parts.join(summed, how="left").fillna(0.0)
-    mismatched = compared[((compared["usd_vence"] - compared["forecast_to_renew_USD"]).abs() > MONEY_TOLERANCE)
-                          | ((compared["usd_renovado"] - compared["forecast_renewed_USD"]).abs() > MONEY_TOLERANCE)]
+    mismatched = compared[((compared["usd_vence"] - compared["forecast_to_renew_USD"]).abs() > configuration.money_tolerance)
+                          | ((compared["usd_renovado"] - compared["forecast_renewed_USD"]).abs() > configuration.money_tolerance)]
     configuration.log_check(STEP_LABEL, check_log, "the core summed by year and origin = sff_forecast_total (the total comes from the core)",
                             mismatched.empty, failure_detail=f"{len(mismatched)} year × origin differ",
                             context=f"{len(compared)} year × origin compared",
@@ -754,13 +757,13 @@ def log_core_report(core: pd.DataFrame, dimension: pd.DataFrame, configuration: 
     """Action 9: one series as it looks in the two tables, and how to read them in Power BI."""
     largest_series = core.groupby("s03_fs_id")["s00_vencen_usd"].sum().idxmax()
     configuration.log_action(STEP_LABEL, 9, f"the series with the most money, '{largest_series}': its row of sff_forecast_series "
-                                            f"and its last {MONTHS_SHOWN} closed months in sff_nucleo:")
+                                            f"and its last {configuration.core_months_shown} closed months in sff_nucleo:")
     shown = ["s03_fs_id", "s06_ruta", "s08_n_propio", "s08_tasa_propia", "s10_stage3_id", "s10_stage3_support", "s11_tasa_estimada",
              "s11_nivel_riesgo", "s19_exam_mae_pp", "s19_raw_mae_pp", "s19_exam_coverage", "s17_confidence"]
     configuration.show_table(dimension[dimension["s03_fs_id"] == largest_series][[column for column in shown if column in dimension.columns]])
     series_rows = core[(core["s03_fs_id"] == largest_series) & core["s02_rol"].isin([ROLE_TRAIN, ROLE_TEST])]
     shown_columns = [configuration.period_col, ROW_ORIGIN_COLUMN, "s02_rol", "s00_vencen_unidades", "s02_renovadas_unidades"]
-    configuration.show_table(series_rows.tail(MONTHS_SHOWN)[[column for column in shown_columns if column in core.columns]])
+    configuration.show_table(series_rows.tail(configuration.core_months_shown)[[column for column in shown_columns if column in core.columns]])
     configuration.logger.doc(f"[{STEP_LABEL}] in Power BI: relate sff_forecast_series[s03_fs_id] 1 → n sff_nucleo[s03_fs_id]; a "
                              f"slicer on the dimension selects forecast series (by id, confidence, risk level, stage, exam…) and "
                              f"filters their rows. A rate is a measure (a ratio of sums), never a column. Measures to create:")

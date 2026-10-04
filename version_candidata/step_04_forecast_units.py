@@ -53,11 +53,8 @@ STEP_ACTIONS = ["group the fine rows by forecast unit",
 STEP_OUTPUT = "one row per forecast unit with its four measures summed · table sff_fact_fu"
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-EXAMPLE_ROWS_SHOWN = 3
 # Money is conserved when the difference is below a cent or a billionth of the total
 # (float sums over a million rows differ in the last digits).
-MONEY_ABSOLUTE_TOLERANCE = 0.01
-MONEY_RELATIVE_TOLERANCE = 1e-9
 
 
 def build_forecast_units(fine_table: pd.DataFrame, configuration: Config) -> pd.DataFrame:
@@ -146,7 +143,7 @@ def check_money_conserved(fine_table: pd.DataFrame, forecast_units: pd.DataFrame
     for measure_column in configuration.core_measures:
         fine_total = float(fine_table[measure_column].sum())
         units_total = float(forecast_units[measure_column].sum())
-        tolerance = max(MONEY_ABSOLUTE_TOLERANCE, MONEY_RELATIVE_TOLERANCE * abs(fine_total))
+        tolerance = max(configuration.money_tolerance, configuration.money_relative_tolerance * abs(fine_total))
         if abs(units_total - fine_total) > tolerance:
             differences[measure_column] = units_total - fine_total
     pipeline_usd = float(forecast_units[configuration.pipeline_usd_col].sum())

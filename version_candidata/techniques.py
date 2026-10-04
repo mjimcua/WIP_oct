@@ -27,21 +27,27 @@ seasonality verdict restricts it: the backtest decides.
 import numpy as np
 import pandas as pd
 
+from config import Config
 
-# ─── named constants ─────────────────────────────────────────────────────────────
-LOGIT_CLIP = 0.001                 # a rate of exactly 0 or 1 has no logit: it is clipped to [0.001, 0.999]
-EWMA_HALFLIFE_MONTHS = 3.0
-SES_ALPHA = 0.3
-HOLT_ALPHA, HOLT_BETA, HOLT_DAMPING = 0.3, 0.1, 0.9
-THETA_WEIGHT = 0.5
-TEMPORAL_CREDIBILITY_K = 6.0
-RECENT_WINDOW_MONTHS = 6
-MONTHS_PER_CYCLE = 12
-HW_ALPHA, HW_BETA, HW_GAMMA = 0.3, 0.05, 0.2
+
+# ─── the parameters of the techniques: they live in the Config ────────────────────
+# The orchestrator hands them over before any step runs (apply_configuration). Until then they hold the
+# Config's defaults, so a step or a test that calls a technique alone sees the same numbers.
+TECHNIQUE_PARAMETERS = ["logit_clip", "ewma_halflife_months", "ses_alpha", "holt_alpha", "holt_beta", "holt_damping",
+                        "theta_weight", "temporal_credibility_k", "recent_window_months", "holt_winters_alpha",
+                        "holt_winters_beta", "holt_winters_gamma"]
+parameters = {name: Config.__dataclass_fields__[name].default for name in TECHNIQUE_PARAMETERS}
+MONTHS_PER_CYCLE = 12                                     # a definition, not a parameter: the months of a year
+
+
+def apply_configuration(configuration: Config) -> None:
+    """The technique parameters of this run, from its Config."""
+    for name in TECHNIQUE_PARAMETERS:
+        parameters[name] = getattr(configuration, name)
 
 
 def logit(rates: np.ndarray) -> np.ndarray:
-    clipped = np.clip(np.asarray(rates, dtype=float), LOGIT_CLIP, 1 - LOGIT_CLIP)
+    clipped = np.clip(np.asarray(rates, dtype=float), parameters["logit_clip"], 1 - parameters["logit_clip"])
     return np.log(clipped / (1 - clipped))
 
 
@@ -68,14 +74,14 @@ def moving_average_6(y, months, h):
 
 
 def exponentially_weighted_mean(y, months, h):
-    weights = 0.5 ** (np.arange(len(y))[::-1] / EWMA_HALFLIFE_MONTHS)
+    weights = 0.5 ** (np.arange(len(y))[::-1] / parameters["ewma_halflife_months"])
     return float(np.sum(weights * y) / np.sum(weights))
 
 
 def simple_exponential_smoothing(y, months, h):
     level = y[0]
     for value in y[1:]:
-        level = SES_ALPHA * value + (1 - SES_ALPHA) * level
+        level = parameters["ses_alpha"] * value + (1 - parameters["ses_alpha"]) * level
     return float(level)
 
 
@@ -83,27 +89,27 @@ def holt_damped(y, months, h):
     level, trend = y[0], (y[1] - y[0]) if len(y) > 1 else 0.0
     for value in y[1:]:
         previous_level = level
-        level = HOLT_ALPHA * value + (1 - HOLT_ALPHA) * (level + HOLT_DAMPING * trend)
-        trend = HOLT_BETA * (level - previous_level) + (1 - HOLT_BETA) * HOLT_DAMPING * trend
-    return float(level + trend * damping_weight(h, HOLT_DAMPING))
+        level = parameters["holt_alpha"] * value + (1 - parameters["holt_alpha"]) * (level + parameters["holt_damping"] * trend)
+        trend = parameters["holt_beta"] * (level - previous_level) + (1 - parameters["holt_beta"]) * parameters["holt_damping"] * trend
+    return float(level + trend * damping_weight(h, parameters["holt_damping"]))
 
 
 def damped_linear_trend(y, months, h):
     positions = np.arange(len(y), dtype=float)
     slope, intercept = np.polyfit(positions, y, 1)
-    return float(intercept + slope * (len(y) - 1) + slope * damping_weight(h, HOLT_DAMPING))
+    return float(intercept + slope * (len(y) - 1) + slope * damping_weight(h, parameters["holt_damping"]))
 
 
 def theta(y, months, h):
     """Theta (Assimakopoulos & Nikolopoulos 2000), simple form: half damped linear trend,
     half simple exponential smoothing. Follows level and trend, never invents a season."""
-    return float(THETA_WEIGHT * damped_linear_trend(y, months, h) + (1 - THETA_WEIGHT) * simple_exponential_smoothing(y, months, h))
+    return float(parameters["theta_weight"] * damped_linear_trend(y, months, h) + (1 - parameters["theta_weight"]) * simple_exponential_smoothing(y, months, h))
 
 
 def temporal_credibility(y, months, h):
     """The recent window blended with the whole history, z = n / (n + k) on the recent months."""
-    recent = y[-RECENT_WINDOW_MONTHS:]
-    z = len(recent) / (len(recent) + TEMPORAL_CREDIBILITY_K)
+    recent = y[-parameters["recent_window_months"]:]
+    z = len(recent) / (len(recent) + parameters["temporal_credibility_k"])
     return float(z * np.mean(recent) + (1 - z) * np.mean(y))
 
 
@@ -137,10 +143,10 @@ def holt_winters(y, months, h):
     for index in range(MONTHS_PER_CYCLE, len(y)):
         month = int(months[index])
         previous_level = level
-        level = HW_ALPHA * (y[index] - season[month - 1]) + (1 - HW_ALPHA) * (level + HOLT_DAMPING * trend)
-        trend = HW_BETA * (level - previous_level) + (1 - HW_BETA) * HOLT_DAMPING * trend
-        season[month - 1] = HW_GAMMA * (y[index] - level) + (1 - HW_GAMMA) * season[month - 1]
-    return float(level + trend * damping_weight(h, HOLT_DAMPING) + season[target_calendar_month(months, h) - 1])
+        level = parameters["holt_winters_alpha"] * (y[index] - season[month - 1]) + (1 - parameters["holt_winters_alpha"]) * (level + parameters["holt_damping"] * trend)
+        trend = parameters["holt_winters_beta"] * (level - previous_level) + (1 - parameters["holt_winters_beta"]) * parameters["holt_damping"] * trend
+        season[month - 1] = parameters["holt_winters_gamma"] * (y[index] - level) + (1 - parameters["holt_winters_gamma"]) * season[month - 1]
+    return float(level + trend * damping_weight(h, parameters["holt_damping"]) + season[target_calendar_month(months, h) - 1])
 
 
 # id → (family, description, months of memory, minimum months of history, function)
@@ -149,8 +155,8 @@ CATALOGUE = {
     "T3_ma3":             ("media", "media de los últimos 3 meses (el retador)", "3", 3, moving_average_3),
     "T3_ma6":             ("media", "media de los últimos 6 meses", "6", 6, moving_average_6),
     "T4_ewma":            ("suavizado", "media ponderada, pesos que se reducen a la mitad cada 3 meses", "~6", 4, exponentially_weighted_mean),
-    "T9_ses":             ("suavizado", "suavizado exponencial simple (α = 0,3)", "~6", 4, simple_exponential_smoothing),
-    "T10_holt_damped":    ("suavizado", "nivel + tendencia que se amortigua (Holt, φ = 0,9)", "12", 12, holt_damped),
+    "T9_ses":             ("suavizado", "suavizado exponencial simple (α de la Config: ses_alpha)", "~6", 4, simple_exponential_smoothing),
+    "T10_holt_damped":    ("suavizado", "nivel + tendencia que se amortigua (Holt, φ de la Config: holt_damping)", "12", 12, holt_damped),
     "T12_theta":          ("serie_temporal", "Theta: mitad tendencia lineal amortiguada, mitad suavizado simple", "toda", 12, theta),
     "T14_temporal_cred":  ("media", "últimos 6 meses mezclados con toda la historia por credibilidad", "toda", 6, temporal_credibility),
     "T15_level_seasonal": ("serie_temporal", "nivel reciente + efecto del mes objetivo", "toda", 13, level_plus_month_effect),

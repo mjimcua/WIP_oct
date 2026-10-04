@@ -79,18 +79,7 @@ STEP_OUTPUT = ("the uplift of every uplift cell (origin, band) · the contract c
                "tables sff_uplift_celda, sff_uplift_contrato_check, sff_uplift_homogeneidad")
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-MIN_UPLIFT = 0.01
 # ─── the revaluation report (action 9): where does the renewers' revaluation sit ──
-REPORT_WINDOW_MONTHS = 12          # the distribution is measured over the last N closed months
-REPORT_MONTHLY_MONTHS = 24         # the monthly path shows the last N closed months
-REPORT_UNITS_FLOOR = 271.0         # a series enters when it averages at least this many units due per month...
-REPORT_TOP_SERIES = 50             # ...or is among this many biggest by USD due (the "more value" door)
-REPORT_UPLIFT_BUCKETS = [0.0, 0.80, 0.90, 0.95, 0.975, 1.00, 1.025, 1.05, 1.10, 1.20, 1.50, np.inf]
-REPORT_HISTOGRAM_WIDTH = 40        # characters of the longest histogram bar
-REPORT_STEP_THRESHOLD = 0.03       # a monthly step this big over the previous-12 average is above the threshold...
-REPORT_PERSISTENCE_MONTHS = 3      # ...and an increase only when it stays this many months in a row (as step 22)
-CONTRACT_TOLERANCE = 0.02          # a renewal "matches" the rule when its uplift is within ±2 % of 1/(1−d)
-BAND_LOW, BAND_HIGH = 0.05, 0.95
 
 
 def renewer_rows(fine_table: pd.DataFrame, configuration: Config, before_month=None) -> pd.DataFrame:
@@ -171,12 +160,12 @@ def weighted_percentiles(values: np.ndarray, weights: np.ndarray, points: list) 
     return [float(np.interp(point, cumulative_share, ordered_values)) for point in points]
 
 
-def histogram_lines(series_table: pd.DataFrame, title: str) -> list:
+def histogram_lines(series_table: pd.DataFrame, title: str, configuration: Config) -> list:
     """The uplift histogram of a set of series, one text line per bucket: how many series fall in it,
     how much renewed USD, and a bar proportional to the USD share (the money is what matters)."""
     lines = [f"histogram · {title} (bar = % of the renewed USD)",
              f"{'uplift':>15}  {'series':>6}  {'% series':>8}  {'USD renovado':>14}  {'% USD':>6}"]
-    assigned = pd.cut(series_table["uplift"], REPORT_UPLIFT_BUCKETS, right=False)
+    assigned = pd.cut(series_table["uplift"], configuration.revaluation_uplift_buckets, right=False)
     grouped = series_table.groupby(assigned, observed=False).agg(series=("uplift", "size"), usd=("usd_renovado", "sum"))
     usd_share = grouped["usd"] / max(grouped["usd"].sum(), 1e-9)
     series_share = grouped["series"] / max(grouped["series"].sum(), 1e-9)
@@ -185,7 +174,7 @@ def histogram_lines(series_table: pd.DataFrame, title: str) -> list:
         label = (f"      < {interval.right:.3f}" if interval.left == 0.0
                  else f"      ≥ {interval.left:.3f}" if np.isinf(interval.right)
                  else f"{interval.left:.3f} – {interval.right:.3f}")
-        bar = "█" * int(round(REPORT_HISTOGRAM_WIDTH * usd_part / longest)) if row["usd"] > 0 else ""
+        bar = "█" * int(round(configuration.histogram_width * usd_part / longest)) if row["usd"] > 0 else ""
         lines.append(f"{label:>15}  {int(row['series']):>6}  {series_part:>8.1%}  {row['usd']:>14,.0f}  {usd_part:>6.1%}  {bar}")
     return lines
 
@@ -289,7 +278,7 @@ def licence_level_report(population: pd.DataFrame, configuration: Config) -> Non
     doc(f"[{STEP_LABEL}] histogram · the value of the isolated renewals by renewal ratio, licence by licence")
     doc(f"[{STEP_LABEL}] {'ratio':>13}  {'USD que valían':>16}  {'% valor':>7}")
     for (_, _, _, _, label), value in zip(bands, values):
-        bar = "█" * int(round(REPORT_HISTOGRAM_WIDTH * (value / total) / longest)) if value > 0 else ""
+        bar = "█" * int(round(configuration.histogram_width * (value / total) / longest)) if value > 0 else ""
         doc(f"[{STEP_LABEL}] {label:>13}  {value:>16,.0f}  {value / total:>7.1%}  {bar}")
     near = population["_rep_cerca_100"].sum() / total
     high = population["_rep_mas_110"].sum() / total
@@ -316,14 +305,14 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
     RULES:   the population is the ISOLATED renewals (isolated_* of the Config: the normal renewal
              process, no retention event) when they are declared, every renewer otherwise (logged);
              the acquisition filter uses acquisition_column / acquisition_values. See report_population.
-             A series enters the distribution when it averages ≥ REPORT_UNITS_FLOOR units due per month
-             in the window, or is among the REPORT_TOP_SERIES biggest by USD due.
+             A series enters the distribution when it averages ≥ configuration.revaluation_units_floor units due per month
+             in the window, or is among the configuration.revaluation_top_series biggest by USD due.
     EDGE CASES: with no series past the floor, the report says so and stops; a single series still
              gets its percentiles (they are all its own uplift).
     """
     doc = configuration.logger.doc
     closed_periods = sorted(renewers[configuration.period_col].unique())
-    window = closed_periods[-REPORT_WINDOW_MONTHS:]
+    window = closed_periods[-configuration.revaluation_window_months:]
     population, funnel_rows, population_text, base_text = report_population(
         renewers[renewers[configuration.period_col].isin(window)], configuration)
     doc(f"[{STEP_LABEL}] window {window[0]} to {window[-1]} · population: {population_text} · uplift base: {base_text}")
@@ -355,17 +344,17 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
                           if with_licence_level else np.nan)
     per_series["cerca_100"] = per_series["cerca_100"] / per_series["base"] if with_bands else np.nan
     per_series["mas_110"] = per_series["mas_110"] / per_series["base"] if with_bands else np.nan
-    biggest = per_series.nlargest(REPORT_TOP_SERIES, "vencen_usd")[SERIES_ID_COLUMN]
-    selected = per_series[(per_series["unidades_mes"] >= REPORT_UNITS_FLOOR)
+    biggest = per_series.nlargest(configuration.revaluation_top_series, "vencen_usd")[SERIES_ID_COLUMN]
+    selected = per_series[(per_series["unidades_mes"] >= configuration.revaluation_units_floor)
                           | per_series[SERIES_ID_COLUMN].isin(set(biggest))].copy()
     if not len(selected):
-        doc(f"[{STEP_LABEL}] no series past the floor ({REPORT_UNITS_FLOOR:,.0f} units due per month): nothing to show")
+        doc(f"[{STEP_LABEL}] no series past the floor ({configuration.revaluation_units_floor:,.0f} units due per month): nothing to show")
         return
     if with_licence_level or with_bands:
         licence_level_report(population, configuration)
     covered = selected["usd_renovado"].sum() / max(per_series["usd_renovado"].sum(), 1e-9)
-    doc(f"[{STEP_LABEL}] {len(selected):,} series in the distribution (floor {REPORT_UNITS_FLOOR:,.0f} units/month or "
-        f"top {REPORT_TOP_SERIES} by USD due): {covered:.0%} of the renewed USD of the population")
+    doc(f"[{STEP_LABEL}] {len(selected):,} series in the distribution (floor {configuration.revaluation_units_floor:,.0f} units/month or "
+        f"top {configuration.revaluation_top_series} by USD due): {covered:.0%} of the renewed USD of the population")
 
     # the claim, measured: the aggregate, the weighted percentiles and the money in each zone
     weights = selected["usd_renovado"].to_numpy(dtype=float)
@@ -398,11 +387,11 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
             f"share of the value in [0.95, 1.05); mas_110 = share at or above 1.10):")
         configuration.show_table(licence_level_summary(population, configuration.discount_bucket_column, configuration))
 
-    for line in histogram_lines(selected, "every series in the distribution"):
+    for line in histogram_lines(selected, "every series in the distribution", configuration):
         doc(f"[{STEP_LABEL}] {line}")
     mostly_unknown = selected[selected["usd_desconocido"] / selected["usd_renovado"] > 0.5]
     if len(mostly_unknown):
-        for line in histogram_lines(mostly_unknown, "series whose renewed USD is mostly of UNKNOWN discount"):
+        for line in histogram_lines(mostly_unknown, "series whose renewed USD is mostly of UNKNOWN discount", configuration):
             doc(f"[{STEP_LABEL}] {line}")
 
     top = selected.nlargest(15, "vencen_usd")[[SERIES_ID_COLUMN, "meses", "unidades_mes", "vencen_usd",
@@ -414,7 +403,7 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
     configuration.show_table(top)
 
     # the monthly path of the same population, over a longer window: steps betray a price increase
-    monthly_window = closed_periods[-REPORT_MONTHLY_MONTHS:]
+    monthly_window = closed_periods[-configuration.revaluation_monthly_months:]
     monthly_population = report_population(renewers[renewers[configuration.period_col].isin(monthly_window)],
                                            configuration)[0]
     monthly = (monthly_population.groupby(configuration.period_col)
@@ -436,22 +425,22 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
     shown["media_12_previos"] = shown["media_12_previos"].round(3)
     shown["escalon"] = (100 * shown["escalon"]).round(1)
     configuration.show_table(shown.rename(columns={"escalon": "escalon_pct"}))
-    recent = monthly.tail(12).dropna(subset=["escalon"]).reset_index(drop=True)
-    above = (recent["escalon"] >= REPORT_STEP_THRESHOLD).to_numpy()
+    recent = monthly.tail(configuration.revaluation_window_months).dropna(subset=["escalon"]).reset_index(drop=True)
+    above = (recent["escalon"] >= configuration.price_step_threshold).to_numpy()
     longest_run, current_run = 0, 0
     for is_above in above:
         current_run = current_run + 1 if is_above else 0
         longest_run = max(longest_run, current_run)
     listed = " · ".join(f"{row[configuration.period_col]} ({row['escalon']:+.1%})"
                         for _, row in recent[above].iterrows())
-    if longest_run >= REPORT_PERSISTENCE_MONTHS:
-        doc(f"[{STEP_LABEL}] VALORACIÓN: a step of ≥ {REPORT_STEP_THRESHOLD:.0%} held {longest_run} months in a row in the "
+    if longest_run >= configuration.price_persistence_months:
+        doc(f"[{STEP_LABEL}] VALORACIÓN: a step of ≥ {configuration.price_step_threshold:.0%} held {longest_run} months in a row in the "
             f"last 12 closed ({listed}): the shape of a price increase (its effect lasts one renewal cycle)")
     elif above.any():
-        doc(f"[{STEP_LABEL}] VALORACIÓN: months above {REPORT_STEP_THRESHOLD:.0%} but never {REPORT_PERSISTENCE_MONTHS} in a "
+        doc(f"[{STEP_LABEL}] VALORACIÓN: months above {configuration.price_step_threshold:.0%} but never {configuration.price_persistence_months} in a "
             f"row ({listed}): noise, not an increase")
     elif len(recent):
-        doc(f"[{STEP_LABEL}] VALORACIÓN: no step of ≥ {REPORT_STEP_THRESHOLD:.0%} in the last 12 closed months: no sign "
+        doc(f"[{STEP_LABEL}] VALORACIÓN: no step of ≥ {configuration.price_step_threshold:.0%} in the last 12 closed months: no sign "
             f"of a price increase in this population")
 
 def estimate_cell_uplifts(fine_table: pd.DataFrame, renewers: pd.DataFrame, configuration: Config) -> pd.DataFrame:
@@ -479,7 +468,7 @@ def estimate_cell_uplifts(fine_table: pd.DataFrame, renewers: pd.DataFrame, conf
     conditions = [cells["renovadores"] >= floor, cells["renovadores_padre"] >= floor, cells["renovadores_celda"] > 0]
     cells["uplift_origen"] = np.select(conditions, [UPLIFT_OWN, UPLIFT_PARENT, UPLIFT_CELL], default=UPLIFT_GLOBAL)
     chosen = np.select(conditions, [cells["uplift_propio"], cells["uplift_padre"], cells["uplift_celda"]], default=global_uplift)
-    cells["uplift"] = np.clip(chosen, MIN_UPLIFT, configuration.uplift_cap)
+    cells["uplift"] = np.clip(chosen, configuration.min_uplift, configuration.uplift_cap)
     cells["recortado"] = (cells["uplift"] != chosen).astype(int)
 
     # the band: bootstrap of the renewer rows of the group the uplift came from
@@ -501,11 +490,11 @@ def estimate_cell_uplifts(fine_table: pd.DataFrame, renewers: pd.DataFrame, conf
             else:
                 picks = positions[generator.integers(0, len(positions), size=(configuration.uplift_bootstrap_samples, len(positions)))]
                 samples = numerator[picks].sum(axis=1) / denominator[picks].sum(axis=1)
-                cache[(origin, group_key)] = (float(np.quantile(samples, BAND_LOW)), float(np.quantile(samples, BAND_HIGH)))
+                cache[(origin, group_key)] = (float(np.quantile(samples, configuration.uplift_band_low)), float(np.quantile(samples, configuration.uplift_band_high)))
         low, high = cache[(origin, group_key)]
         lows.append(low); highs.append(high)
-    cells["uplift_bajo"] = np.clip(lows, MIN_UPLIFT, configuration.uplift_cap)
-    cells["uplift_alto"] = np.clip(highs, MIN_UPLIFT, configuration.uplift_cap)
+    cells["uplift_bajo"] = np.clip(lows, configuration.min_uplift, configuration.uplift_cap)
+    cells["uplift_alto"] = np.clip(highs, configuration.min_uplift, configuration.uplift_cap)
     cells.attrs["uplift_global"] = global_uplift
     return cells
 
@@ -518,9 +507,9 @@ def contract_check(renewers: pd.DataFrame, configuration: Config) -> pd.DataFram
         return pd.DataFrame(columns=["tramo", "renovadores", "usd_renovado", "uplift_observado", "uplift_regla",
                                      "ratio_realizacion", "pct_usd_dentro_2pct"])
     known = renewers[renewers[configuration.discount_value_column].notna()].copy()
-    known["_regla"] = 1 / (1 - known[configuration.discount_value_column].clip(upper=0.99))
+    known["_regla"] = 1 / (1 - known[configuration.discount_value_column].clip(upper=configuration.contract_discount_cap))
     known["_uplift_fila"] = known["_numerador"] / known["_denominador"]
-    known["_dentro"] = ((known["_uplift_fila"] / known["_regla"] - 1).abs() <= CONTRACT_TOLERANCE).astype(float)
+    known["_dentro"] = ((known["_uplift_fila"] / known["_regla"] - 1).abs() <= configuration.contract_tolerance).astype(float)
     known["_regla_por_denominador"] = known["_regla"] * known["_denominador"]
     known["_usd_dentro"] = known["_dentro"] * known["_numerador"]
     grouped = known.groupby(configuration.discount_bucket_column)
@@ -573,8 +562,8 @@ def estimate_uplift(fine_table: pd.DataFrame, configuration: Config) -> tuple:
     configuration.log_check(STEP_LABEL, check_log, "every uplift cell of the fine table has an uplift (future cells included)",
                             not missing and cells["uplift"].notna().all(),
                             failure_detail=f"{len(missing)} cells without uplift", context=f"{len(cells):,} cells")
-    configuration.log_check(STEP_LABEL, check_log, f"every uplift is inside [{MIN_UPLIFT}, {configuration.uplift_cap}]",
-                            cells["uplift"].between(MIN_UPLIFT, configuration.uplift_cap).all(),
+    configuration.log_check(STEP_LABEL, check_log, f"every uplift is inside [{configuration.min_uplift}, {configuration.uplift_cap}]",
+                            cells["uplift"].between(configuration.min_uplift, configuration.uplift_cap).all(),
                             failure_detail="uplifts outside the range",
                             context=f"from {cells['uplift'].min():.3f} to {cells['uplift'].max():.3f}; {int(cells['recortado'].sum())} clipped")
     with_band = cells[cells["uplift_bajo"].notna() & (cells["recortado"] == 0)]

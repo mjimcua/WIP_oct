@@ -257,7 +257,7 @@ def check_the_values(renewal_raw: pd.DataFrame, configuration: Config, check_log
         total_column = measure.part_of
         if total_column is None:
             continue                                  # not a part of anything (the second moment): checked below
-        above_total = closed_rows[closed_rows[closed_month_column] > closed_rows[total_column] + 0.01]
+        above_total = closed_rows[closed_rows[closed_month_column] > closed_rows[total_column] + configuration.money_tolerance]
         configuration.log_check(STEP_LABEL, check_log, f"{closed_month_column} is not above {total_column}, closed months",
                                 above_total.empty,
                                 failure_detail=f"{len(above_total):,} closed rows with {closed_month_column} above "
@@ -272,7 +272,8 @@ def check_the_values(renewal_raw: pd.DataFrame, configuration: Config, check_log
         # column was not built as Σ renewed_usd² / due_usd licence by licence
         with_base = closed_rows[closed_rows[base_column] > 0]
         negative_variance = with_base[with_base[moment_column] * with_base[base_column]
-                                      < with_base[renewed_column] ** 2 * (1 - 1e-6) - 0.01]
+                                      < with_base[renewed_column] ** 2 * (1 - configuration.measure_relative_tolerance)
+                                      - configuration.money_tolerance]
         configuration.log_check(STEP_LABEL, check_log, f"{moment_column} gives a variance ≥ 0, closed months",
                                 negative_variance.empty,
                                 failure_detail=f"{len(negative_variance):,} closed rows where Σ renewed² / base is below "
@@ -283,7 +284,8 @@ def check_the_values(renewal_raw: pd.DataFrame, configuration: Config, check_log
         # the six bands cover every ratio: together they are the isolated base
         band_total = closed_rows[band_columns].fillna(0).sum(axis=1)
         off_base = closed_rows[(band_total - closed_rows[base_column].fillna(0)).abs()
-                               > 0.01 + 1e-6 * closed_rows[base_column].fillna(0).abs()]
+                               > configuration.money_tolerance
+                               + configuration.measure_relative_tolerance * closed_rows[base_column].fillna(0).abs()]
         configuration.log_check(STEP_LABEL, check_log, f"the {len(band_columns)} ratio bands add up to {base_column}, closed months",
                                 off_base.empty,
                                 failure_detail=f"{len(off_base):,} closed rows whose bands do not add up to the isolated "

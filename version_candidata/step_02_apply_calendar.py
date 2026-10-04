@@ -76,9 +76,7 @@ STEP_OUTPUT = ("the raw with six new columns (rol, es_mes_en_curso, s0_renovados
 
 # ─── named constants ─────────────────────────────────────────────────────────────
 # Below a year of training months no seasonal pattern can be learned.
-MIN_TRAINING_MONTHS = 12
 # Money must be conserved to the cent when nothing is supposed to change it.
-MONEY_TOLERANCE = 0.01
 
 
 def apply_calendar(validated: pd.DataFrame, configuration: Config) -> pd.DataFrame:
@@ -127,7 +125,8 @@ def apply_calendar(validated: pd.DataFrame, configuration: Config) -> pd.DataFra
     # [4b] the pipeline that the current month and later will create: a 1-year licence due in
     #      month m was sold or renewed in m − 12; if m − 12 is the current month or later, that
     #      event has not happened (or only in part): its pipeline is wiped and step 17 projects it
-    not_known_yet = (calendared[period_column] >= boundaries["current"] + 12) & is_one_year(calendared, configuration)
+    not_known_yet = ((calendared[period_column] >= boundaries["current"] + configuration.one_year_term_months)
+                     & is_one_year(calendared, configuration))
     wiped_pipeline_units = float(calendared.loc[not_known_yet, configuration.pipeline_units_col].sum())
     wiped_pipeline_usd = float(calendared.loc[not_known_yet, configuration.pipeline_usd_col].sum())
     calendared.loc[not_known_yet, [configuration.pipeline_units_col, configuration.pipeline_usd_col]] = 0.0
@@ -202,8 +201,8 @@ def check_roles_and_calendar(calendared: pd.DataFrame, configuration: Config, ch
 
     # [2] a year of training at least
     training_months = len(months_per_role[ROLE_TRAIN])
-    configuration.log_check(STEP_LABEL, check_log, f"training has at least {MIN_TRAINING_MONTHS} months",
-                            training_months >= MIN_TRAINING_MONTHS,
+    configuration.log_check(STEP_LABEL, check_log, f"training has at least {configuration.min_training_months} months",
+                            training_months >= configuration.min_training_months,
                             failure_detail=f"only {training_months} training months: no seasonal pattern can be learned",
                             context=f"{training_months} months", blocking=False)
 
@@ -236,7 +235,7 @@ def check_money_conserved(validated: pd.DataFrame, calendared: pd.DataFrame, con
                                                - validated.loc[~not_known_yet, column_name].sum())
                             for column_name in pipeline_columns}
     configuration.log_check(STEP_LABEL, check_log, "the pipeline is unchanged except the rows not known yet (units and USD)",
-                            all(abs(difference) <= MONEY_TOLERANCE for difference in pipeline_differences.values()),
+                            all(abs(difference) <= configuration.money_tolerance for difference in pipeline_differences.values()),
                             failure_detail=f"the pipeline changed: {pipeline_differences}")
     pipeline_left = float(calendared.loc[not_known_yet, pipeline_columns].abs().sum().sum())
     configuration.log_check(STEP_LABEL, check_log, "no 1-year row created from the current month on keeps its pipeline",
@@ -250,7 +249,7 @@ def check_money_conserved(validated: pd.DataFrame, calendared: pd.DataFrame, con
                                              - validated.loc[closed_rows, column_name].fillna(0).sum())
                           for column_name in renewed_columns}
     configuration.log_check(STEP_LABEL, check_log, "the renewals of the closed months are unchanged, a null read as 0",
-                            all(abs(difference) <= MONEY_TOLERANCE for difference in closed_differences.values())
+                            all(abs(difference) <= configuration.money_tolerance for difference in closed_differences.values())
                             and not calendared.loc[closed_rows, renewed_columns].isna().any().any(),
                             failure_detail=f"closed renewals changed: {closed_differences}",
                             context=f"{null_renewals_read_as_zero:,} null renewals read as 0")

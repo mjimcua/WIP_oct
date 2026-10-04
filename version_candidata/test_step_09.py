@@ -12,7 +12,7 @@ from step_05_lookups import build_lookups
 from step_08_rate_series import build_rate_series
 from step_09_dimensions import (analyse_dimensions, sequential_collapse_order, weighted_eta2, weighted_omega2,
                                 weighted_r2)
-from test_helpers import check, console_of, count_status, finish
+from test_helpers import check, console_of, count_status, finish, synthetic_with
 from test_step_08 import inputs_synthetic
 from test_step_05 import units_synthetic
 
@@ -25,15 +25,15 @@ def test_the_statistics() -> None:
     check(abs(weighted_eta2(frame, "region") - 1.0) < 1e-12 and weighted_eta2(frame, "channel") < 0.2,
           "region explains the whole rate (η² = 1); channel almost nothing")
     check(weighted_omega2(frame, "region") <= weighted_eta2(frame, "region"), "ω² is never above η²")
-    check(abs(weighted_r2(frame, ["region", "channel"]) - 1.0) < 1e-9, "the additive model with region fits exactly")
-    order = sequential_collapse_order(frame, ["region", "channel"])
+    check(abs(weighted_r2(frame, ["region", "channel"], synthetic_with().dimension_min_series) - 1.0) < 1e-9, "the additive model with region fits exactly")
+    order = sequential_collapse_order(frame, ["region", "channel"], synthetic_with())
     check([dimension for dimension, _ in order] == ["channel", "region"],
           "the dimension that loses the least R² (channel) collapses first")
 
     nested = pd.DataFrame({"product_level_1": ["A", "A", "A", "A", "B", "B"],
                            "product_level_2": ["A1", "A1", "A2", "A2", "B1", "B1"],
                            "tasa_propia": [0.9, 0.9, 0.5, 0.5, 0.3, 0.3], "n_propio": [5] * 6})
-    order = sequential_collapse_order(nested, ["product_level_1", "product_level_2"])
+    order = sequential_collapse_order(nested, ["product_level_1", "product_level_2"], synthetic_with())
     check([dimension for dimension, _ in order] == ["product_level_2", "product_level_1"],
           "in a hierarchy the finer level collapses first, whatever the loss")
 

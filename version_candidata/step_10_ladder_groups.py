@@ -94,8 +94,6 @@ STEP_ACTIONS = ["the plan of the passes, from the decision of step 09",
 STEP_OUTPUT = ("series × pass with its group id · the summary by pass · the final group and the reference of every series · "
                "tables sff_ladder_steps, sff_ladder_summary, sff_ladder_groups")
 
-SUPPORT_TOLERANCE = 1e-9
-MONEY_TOLERANCE = 0.01
 
 
 def build_ladder_groups(rated_units: pd.DataFrame, series_rate: pd.DataFrame, series_lookup: pd.DataFrame,
@@ -217,7 +215,7 @@ def plan_of_the_passes(dimension_decision: pd.DataFrame, configuration: Config) 
         starred = starred | {dimension}
         cumulative_loss += float(collapse_loss.get(dimension, 1.0))
         signed_allowed = (configuration.signed_ladder_max_loss > 0
-                          and cumulative_loss <= configuration.signed_ladder_max_loss + SUPPORT_TOLERANCE)
+                          and cumulative_loss <= configuration.signed_ladder_max_loss + configuration.support_tolerance)
         # stage 3 merges at most collapse_passes dims; the passes after them are only searched for a
         # credibility reference (stage 4), never to merge
         plan.append(dict(step=len(plan), name=f"without {dimension}", summarise_sign=True, starred=frozenset(starred),
@@ -297,7 +295,7 @@ def run_the_passes(estimable: pd.DataFrame, patterns: pd.DataFrame, plan: list, 
         allowed = (step["step"] == 0) | (~mixed & (neutral | step["signed_allowed"]))
         last_allowed[allowed] = step["step"]
         support = patterns[step["step"]].map(pattern_stats[step["step"]]["support"]).fillna(0.0)
-        reaches = allowed & chosen_step.isna() & (support >= floor - SUPPORT_TOLERANCE)
+        reaches = allowed & chosen_step.isna() & (support >= floor - configuration.support_tolerance)
         chosen_step[reaches] = step["step"]
     reached = chosen_step.notna()
     final_step = chosen_step.fillna(last_allowed).astype(int)
@@ -329,15 +327,15 @@ def run_the_passes(estimable: pd.DataFrame, patterns: pd.DataFrame, plan: list, 
         step_rows.append(pd.DataFrame({SERIES_ID_COLUMN: estimable.index, "ladder_step": step["step"], "step_name": step["name"],
                                        "group_id": current_id.to_numpy(copy=True), "group_support": support.to_numpy(copy=True),
                                        "series_in_group": current_count.to_numpy(copy=True),
-                                       "closed": (has_group & (support >= floor - SUPPORT_TOLERANCE)).astype(int).to_numpy()}))
+                                       "closed": (has_group & (support >= floor - configuration.support_tolerance)).astype(int).to_numpy()}))
         partition = support_of_groups(history, current_id, configuration)
         group_support = pd.Series(support.to_numpy(), index=current_id.to_numpy()).groupby(level=0).first()
         summary_rows.append({
             "ladder_step": step["step"], "step_name": step["name"], "groups": int(current_id.nunique()),
-            "open_groups": int((group_support < floor - SUPPORT_TOLERANCE).sum()),
+            "open_groups": int((group_support < floor - configuration.support_tolerance).sum()),
             "median_group_support": float(group_support.median()),
             "units_due": float(partition["due"].sum()),
-            "pct_usd_floor": float(usd_to_predict[support >= floor - SUPPORT_TOLERANCE].sum() / total_usd) if total_usd else np.nan,
+            "pct_usd_floor": float(usd_to_predict[support >= floor - configuration.support_tolerance].sum() / total_usd) if total_usd else np.nan,
             "pct_usd_own_rate": float(usd_to_predict[support >= configuration.own_rate_floor].sum() / total_usd) if total_usd else np.nan})
         previous_id, previous_count = current_id, current_count
 
@@ -463,7 +461,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
         first_member = members.index[0]
         sign = estimable.loc[first_member, SIGN_COLUMN]
         chosen_step, chosen_id = None, None
-        if stats["support"] < own_rate_floor - SUPPORT_TOLERANCE and sign != SIGN_MIXED:
+        if stats["support"] < own_rate_floor - configuration.support_tolerance and sign != SIGN_MIXED:
             widest = None
             for step in plan:
                 if step["step"] <= step_number or not (sign == SIGN_NEUTRAL or step["signed_allowed"]):
@@ -472,7 +470,7 @@ def credibility_references(estimable: pd.DataFrame, patterns: pd.DataFrame, plan
                 candidate = pattern_stats[step["step"]].loc[candidate_id]
                 if candidate["series"] > stats["series"]:
                     widest = (step["step"], candidate_id)
-                    if candidate["support"] >= floor - SUPPORT_TOLERANCE:
+                    if candidate["support"] >= floor - configuration.support_tolerance:
                         break
             if widest is not None:
                 chosen_step, chosen_id = widest
@@ -508,7 +506,7 @@ def check_the_ladder(steps: pd.DataFrame, summary: pd.DataFrame, groups: pd.Data
     # [1] every pass is a partition: one group per series, and the units due add up to the raw
     raw_units_due = float(history[configuration.pipeline_units_col].sum())
     one_group = steps.groupby("ladder_step")[SERIES_ID_COLUMN].agg(lambda ids: ids.is_unique and len(ids) == len(estimable)).all()
-    adds_up = bool(((summary["units_due"] - raw_units_due).abs() <= MONEY_TOLERANCE).all())
+    adds_up = bool(((summary["units_due"] - raw_units_due).abs() <= configuration.money_tolerance).all())
     configuration.log_check(STEP_LABEL, check_log, "every pass is a partition: one group per series, the units due add up",
                             bool(one_group) and adds_up,
                             failure_detail=f"units due by pass {summary['units_due'].tolist()} vs {raw_units_due:,.0f}",

@@ -66,7 +66,6 @@ STEP_OUTPUT = ("the raw with the discount bucket and seven id and key columns ·
                "(one row per raw row)")
 
 # ─── named constants ─────────────────────────────────────────────────────────────
-EXAMPLE_ROWS_SHOWN = 3
 # Each id column and the key derived from it.
 KEY_OF_ID = {SERIES_ID_COLUMN: SERIES_KEY_COLUMN, UNIT_ID_COLUMN: UNIT_KEY_COLUMN,
              UPLIFT_CELL_ID_COLUMN: UPLIFT_CELL_KEY_COLUMN}
@@ -146,7 +145,7 @@ def build_fine_table(calendared: pd.DataFrame, configuration: Config) -> pd.Data
                                  .reset_index())
     configuration.logger.doc(f"[{STEP_LABEL}] a few rows with their ids:")
     configuration.show_table(fine_table[[configuration.period_col, UNIT_ID_COLUMN, UPLIFT_CELL_ID_COLUMN,
-                                         ROW_KEY_COLUMN]].head(EXAMPLE_ROWS_SHOWN))
+                                         ROW_KEY_COLUMN]].head(configuration.example_rows_shown))
     return fine_table
 
 

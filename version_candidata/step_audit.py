@@ -89,12 +89,7 @@ STEP_ACTIONS = ["sff_composition: every id of every stage (checks 1-2)",
                 "count the checks; stop if any failed"]
 STEP_OUTPUT = "eight audit tables joined to the core by fs_id, the stage ids and the credibility reference"
 
-UNITS_TOLERANCE = 1e-6
-RATE_TOLERANCE = 1e-9
 PERCENTAGE_POINTS = 100
-TREND_MIN_MONTHS = 12          # a trend is measured with at least a year of history
-SEASONALITY_MIN_MONTHS = 24    # a month effect with at least two of every calendar month
-COVERAGE_WARNING = 0.80        # below this share of tests in their interval, the interval promises more than it gives
 STAGES = (0, 1, 2, 3)
 
 
@@ -247,7 +242,7 @@ def check_stages(stages: pd.DataFrame, history: pd.DataFrame, configuration: Con
         members = stages[[SERIES_ID_COLUMN, f"stage{stage}_id"]].rename(columns={f"stage{stage}_id": "id"})
         due_by_stage[stage] = float(monthly_support(history, members, "id", configuration)["units_due"].sum())
     configuration.log_check(STEP_LABEL, check_log, "every stage is a partition: the units due of its ids add up to the raw's",
-                            all(abs(due - raw_due) <= UNITS_TOLERANCE for due in due_by_stage.values()),
+                            all(abs(due - raw_due) <= configuration.units_tolerance for due in due_by_stage.values()),
                             failure_detail=f"units due by stage {due_by_stage} vs {raw_due:,.0f}",
                             context=f"{raw_due:,.0f} units due in every stage")
     configuration.log_check(STEP_LABEL, check_log, "every stage holds every estimable series once",
@@ -349,8 +344,8 @@ def check_references(credibility: pd.DataFrame, members: pd.DataFrame, history: 
     recomputed = monthly_support(history, members[["credibility_ref_id", SERIES_ID_COLUMN]], "credibility_ref_id", configuration)
     compared = credibility.join(recomputed, on="credibility_ref_id")
     compared["members"] = compared["credibility_ref_id"].map(members.groupby("credibility_ref_id").size())
-    wrong = compared[((compared["support"] - compared["ref_support"]).abs() > UNITS_TOLERANCE)
-                     | ((compared["rate"] - compared["ref_rate"]).abs() > RATE_TOLERANCE)
+    wrong = compared[((compared["support"] - compared["ref_support"]).abs() > configuration.units_tolerance)
+                     | ((compared["rate"] - compared["ref_rate"]).abs() > configuration.rate_tolerance)
                      | (compared["members"] != compared["ref_series"])]
     configuration.log_check(STEP_LABEL, check_log, "the support, rate and series of every reference, recomputed from its members, "
                             "are the ones used", wrong.empty, failure_detail=f"{len(wrong)} references differ",
@@ -380,14 +375,14 @@ def series_dynamics_table(groups: pd.DataFrame, series_rate: pd.DataFrame, histo
         own_support = float(support.get(series_id, 0.0))
         row = {SERIES_ID_COLUMN: series_id, COMPOSITION_ID_COLUMN: composition_id, "months": len(months),
                "own_support": own_support}
-        if len(months) < TREND_MIN_MONTHS:
+        if len(months) < configuration.audit_trend_min_months:
             row["measurable"] = "short_history"
         else:
             row["measurable"] = "yes" if own_support >= configuration.support_floor else "low_support"
             measured = dynamics_of_one_series(months, configuration.period_col, configuration)
             row.update(phi=measured["phi"], trend=measured["tendencia"], trend_pp_year=measured["tendencia_pp_ano"],
                        trend_p_value=measured["p_valor_tendencia"])
-            if len(months) >= SEASONALITY_MIN_MONTHS:
+            if len(months) >= configuration.audit_seasonality_min_months:
                 row.update(seasonal=int(measured["estacional"]), seasonal_p_value=measured["p_valor_mes"],
                            amplitude_pp=measured["amplitud_pp"], high_months=measured["meses_alto"],
                            low_months=measured["meses_bajo"])
@@ -498,8 +493,8 @@ def check_series_backtest(series_backtest: pd.DataFrame, predictions: pd.DataFra
               .groupby([COMPOSITION_ID_COLUMN, period])[[due, renewed]].sum())
     compared = exam.set_index([COMPOSITION_ID_COLUMN, "mes_objetivo"])[["vencen_real", "tasa_real"]].join(
         summed.rename_axis([COMPOSITION_ID_COLUMN, "mes_objetivo"]), how="left")
-    adds_up = (((compared[due] - compared["vencen_real"]).abs() <= UNITS_TOLERANCE)
-               & ((compared[renewed] - compared["tasa_real"] * compared["vencen_real"]).abs() <= UNITS_TOLERANCE))
+    adds_up = (((compared[due] - compared["vencen_real"]).abs() <= configuration.units_tolerance)
+               & ((compared[renewed] - compared["tasa_real"] * compared["vencen_real"]).abs() <= configuration.units_tolerance))
     configuration.log_check(STEP_LABEL, check_log, "every composition is the sum of every series in its rate, in every exam month "
                             "(the ones that use it and the ones that lend their history)", bool(adds_up.all()),
                             failure_detail=f"{int((~adds_up).sum())} composition × month differ",
@@ -574,7 +569,7 @@ def check_forecast_all(forecast_all: pd.DataFrame, forecast_rows: pd.DataFrame, 
     chosen = forecast_all[forecast_all["is_chosen"] == 1].set_index([COMPOSITION_ID_COLUMN, "h"])["rate"].to_dict()
     expected = pd.Series([chosen.get(pair, np.nan) for pair in zip(rows[COMPOSITION_ID_COLUMN], rows["h"].astype(int))],
                          index=rows.index, dtype=float)
-    differs = (expected - rows[RATE_COLUMN]).abs() > RATE_TOLERANCE
+    differs = (expected - rows[RATE_COLUMN]).abs() > configuration.rate_tolerance
     configuration.log_check(STEP_LABEL, check_log, "the chosen technique gives the rate step 17 used (rows with no credibility shift)",
                             not bool(differs.any()), failure_detail=f"{int(differs.sum())} future rows differ",
                             context=f"{len(rows):,} future rows compared")

@@ -78,15 +78,11 @@ STEP_OUTPUT = ("one row per series: final group, reference, k, z, estimated rate
                "the money by level · tables sff_series_estimacion, sff_niveles_riesgo")
 
 PERCENTAGE_POINTS = 100
-MIN_SIBLINGS_FOR_K = 3              # below it, the k of the Config
-HOMOGENEOUS_POOL_FACTOR = 10        # a reference with no between variance gets k = 10 × k_cred: its groups take its rate
-MIN_BETWEEN_VARIANCE = 1e-6
-ROUNDING_TOLERANCE = 1e-9
 
 # What each risk level means, for the table of action 8 (the rule, then its meaning).
 LEVEL_DEFINITIONS = [
-    (LEVEL_OWN, "itself, n ≥ own_rate_floor, ≥ 12 months", "own precision: predicts alone, z = 1"),
-    (LEVEL_OWN_SHORT, "itself, n ≥ own_rate_floor, < 12 months", "own precision but a short history: it has not seen every season"),
+    (LEVEL_OWN, "itself, n ≥ own_rate_floor, ≥ own_level_min_history_months", "own precision: predicts alone, z = 1"),
+    (LEVEL_OWN_SHORT, "itself, n ≥ own_rate_floor, < own_level_min_history_months", "own precision but a short history: it has not seen every season"),
     (LEVEL_OWN_REINFORCED, "itself, support_floor ≤ n < own_rate_floor", "own evidence without precision: credibility with its reference"),
     (LEVEL_BORROWED, "merged in the sign or extra passes", "its group shares EVERY mandatory dim with it"),
     (LEVEL_FAR, "merged in a mandatory pass, or never reached the floor", "its group collapsed a mandatory dim"),
@@ -188,11 +184,11 @@ def credibility_k_detail(groups: pd.DataFrame, configuration: Config) -> pd.Data
     detail = pd.DataFrame({"compositions_using": grouped.size(),
                            "within_variance": grouped["_within"].mean(),
                            "between_variance": (grouped["_w_sq_dev"].sum() - grouped["_w_sampling"].sum()) / grouped["_w"].sum()})
-    has_between = detail["between_variance"] > MIN_BETWEEN_VARIANCE
+    has_between = detail["between_variance"] > configuration.min_between_variance
     detail["k"] = np.where(has_between, detail["within_variance"] / detail["between_variance"].where(has_between),
-                           HOMOGENEOUS_POOL_FACTOR * configuration.k_cred)
+                           configuration.homogeneous_pool_factor * configuration.k_cred)
     detail["k_source"] = np.where(has_between, "estimated", "homogeneous")
-    too_few = detail["compositions_using"] < MIN_SIBLINGS_FOR_K
+    too_few = detail["compositions_using"] < configuration.min_siblings_for_k
     detail.loc[too_few, "k"] = configuration.k_cred
     detail.loc[too_few, "k_source"] = "default"
     return detail.reset_index()[columns]
@@ -224,7 +220,7 @@ def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_referen
     reference_rate, reference_support = estimate["ref_rate"], estimate["ref_support"]
     estimate["k"] = estimate["credibility_ref_id"].map(k_by_reference).fillna(configuration.k_cred)
     blends = (estimate["credibility_ref_id"].notna() & reference_rate.notna() & group_rate.notna()
-              & (group_support < configuration.own_rate_floor - ROUNDING_TOLERANCE))
+              & (group_support < configuration.own_rate_floor - configuration.rounding_tolerance))
 
     z = np.where(blends, group_support / (group_support + estimate["k"]), 1.0)
     blended_rate = z * group_rate.fillna(0) + (1 - z) * reference_rate.fillna(0)
@@ -238,7 +234,7 @@ def estimate_rates(series_rate: pd.DataFrame, groups: pd.DataFrame, k_by_referen
     own_noise = binomial_se_pp(np.nan_to_num(estimate["tasa_estimada"], nan=0.5), np.maximum(estimate["n_propio"], 1))
     estimate["se_prediccion_pp"] = np.where(estimate["tasa_estimada"].notna(),
                                             np.sqrt(estimate["se_estimacion_pp"] ** 2 + own_noise ** 2), np.nan)
-    estimate["alcanzo_suelo"] = (group_support >= configuration.support_floor - ROUNDING_TOLERANCE).astype(int)
+    estimate["alcanzo_suelo"] = (group_support >= configuration.support_floor - configuration.rounding_tolerance).astype(int)
     # how much the credibility moves the rate of the composition (pp): 0 when it predicts alone
     estimate["credibility_effect_pp"] = PERCENTAGE_POINTS * (estimate["tasa_estimada"] - group_rate)
     return estimate
@@ -293,8 +289,8 @@ def check_ladder(estimate: pd.DataFrame, series_rate: pd.DataFrame, configuratio
     # [2] the group lends its rate: every series of a group has the same estimated rate
     spread = estimate.dropna(subset=["tasa_estimada"]).groupby(COMPOSITION_ID_COLUMN)["tasa_estimada"].agg(lambda rates: rates.max() - rates.min())
     configuration.log_check(STEP_LABEL, check_log, "every series of a group has the same estimated rate",
-                            bool((spread <= ROUNDING_TOLERANCE).all()),
-                            failure_detail=f"{int((spread > ROUNDING_TOLERANCE).sum()):,} groups with different rates")
+                            bool((spread <= configuration.rounding_tolerance).all()),
+                            failure_detail=f"{int((spread > configuration.rounding_tolerance).sum()):,} groups with different rates")
 
     # [3] proportions
     out_of_range = estimate[(estimate["tasa_estimada"] < 0) | (estimate["tasa_estimada"] > 1)
@@ -304,7 +300,7 @@ def check_ladder(estimate: pd.DataFrame, series_rate: pd.DataFrame, configuratio
                             examples=out_of_range[[SERIES_ID_COLUMN, "tasa_estimada", "z"]])
 
     # [4] the prediction never sheds the series' own noise
-    shrinking = estimate[estimate["se_prediccion_pp"] < estimate["se_estimacion_pp"] - ROUNDING_TOLERANCE]
+    shrinking = estimate[estimate["se_prediccion_pp"] < estimate["se_estimacion_pp"] - configuration.rounding_tolerance]
     configuration.log_check(STEP_LABEL, check_log, "the prediction error is never below the estimation error",
                             shrinking.empty,
                             failure_detail=f"{len(shrinking):,} series whose prediction error is below the estimate's")

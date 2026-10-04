@@ -59,7 +59,6 @@ STEP_OUTPUT = "one row per series with its coverage, route and universe · table
 COVERAGE_SEPARATOR = "+"
 ROUTES_IN_ORDER = [ROUTE_PREDICTABLE, ROUTE_HISTORY_ONLY, ROUTE_FUTURE_ONLY]
 MONTH_COUNT_COLUMN = {ROLE_TRAIN: "meses_entrenamiento", ROLE_TEST: "meses_examen", ROLE_PROJECTION: "meses_proyeccion"}
-EXAMPLE_ROWS_SHOWN = 3
 
 
 def route_from_coverage(roles_present: set) -> str:

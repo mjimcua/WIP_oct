@@ -97,9 +97,7 @@ STEP_ACTIONS = ["the time_series rows by region and month, and the calendar of t
                 "show the total by year × origin and the 10 regions with the most projected value"]
 STEP_OUTPUT = "region × month rows (ts_real, ts_proyectado, ts_reentrada) · year × origin total · tables sff_time_series, sff_forecast_total"
 
-MONEY_TOLERANCE = 0.01
 MONTHS_PER_YEAR = 12
-TOP_REGIONS_SHOWN = 10
 
 
 REGION_KEY = "region_ts"         # the key of a region: its levels joined, coarse to fine
@@ -198,12 +196,12 @@ def build_time_series_and_total(time_series_rows: pd.DataFrame, fine_table: pd.D
     configuration.show_table(total)
     configuration.show_query(STEP_LABEL, "the total by year and origin (sff_forecast_total)", forecast_total_query(configuration))
     if len(projected):
-        configuration.logger.doc(f"[{STEP_LABEL}] the {TOP_REGIONS_SHOWN} regions with the most projected value:")
+        configuration.logger.doc(f"[{STEP_LABEL}] the {configuration.top_regions_shown} regions with the most projected value:")
         configuration.show_table(projected.join(levels_of_region, on=region).groupby(region_columns)
                                  .agg(meses=(period, "size"), unidades=("unidades", "sum"), valor=("valor", "sum"),
                                       nivel=("nivel", "first"), valor_medio=("valor_medio", "first"),
                                       por_cuota=("por_cuota", "max"))
-                                 .reset_index().sort_values("valor", ascending=False).head(TOP_REGIONS_SHOWN))
+                                 .reset_index().sort_values("valor", ascending=False).head(configuration.top_regions_shown))
     return time_series_table, total
 
 
@@ -342,7 +340,7 @@ def check_time_series(total: pd.DataFrame, time_series_table: pd.DataFrame, proj
     totals = total[total["origen"] == TOTAL_ORIGIN_TOTAL].set_index("ano")["usd_renovado"]
     differences = (parts - totals).abs()
     configuration.log_check(STEP_LABEL, check_log, "the origins of every year add up to its total",
-                            bool((differences <= MONEY_TOLERANCE).all()),
+                            bool((differences <= configuration.money_tolerance).all()),
                             failure_detail=f"differences: {differences.to_dict()}", context=f"{len(totals)} years")
     # [2] only projected months re-enter
     real_months = set(zip(time_series_table.loc[time_series_table["origen"] == TS_REAL, region],
