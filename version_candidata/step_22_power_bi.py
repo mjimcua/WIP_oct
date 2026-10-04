@@ -9,8 +9,8 @@ That context is built here, once, in Python, instead of as calculated tables or 
 Tables written (one per auxiliary table; this step will grow with the report):
 
   sff_price_increase_monitor     one row per closed pipeline month: the uplift of everyone, the uplift
-                                 of those who never had a softcancel (the detector: no retention
-                                 discounts in it), the step against the average of the previous 12
+                                 of the ISOLATED renewals (the detector: the normal renewal process, no
+                                 retention discounts in it), the step against the average of the previous 12
                                  months, and the increase cycle (a price increase affects the renewals
                                  of ONE cycle: who renews pays the new price, but a year later everyone
                                  already bought at it, so the step lasts CYCLE_MONTHS and then fades)
@@ -37,7 +37,9 @@ Checks (logged as they are made, numbered, at the level of their status):
 import numpy as np
 import pandas as pd
 
-from config import Config
+from config import (CORE_ISOLATED_BAND_PREFIX, CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD,
+                    CORE_ISOLATED_RENEWED_UNITS, CORE_ISOLATED_RENEWED_USD, CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR,
+                    CORE_RENEWED_PIPELINE_USD, ISOLATED_RATIO_BANDS, Config, weighted_ratio_spread)
 from step_nucleo import FINAL_ORIGIN_COLUMN, TS_WITHOUT_RESULT
 from vocabulario import (ROW_FROM_GAP, TOTAL_ORIGIN_EXPECTED, TOTAL_ORIGIN_PROJECTED, TOTAL_ORIGIN_RENEWED,
                          TOTAL_ORIGIN_SIMULATED, TS_PROJECTED, TS_REAL, TS_REENTRY)
@@ -59,7 +61,7 @@ STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeli
 PIPELINE_SOURCE_TABLE = "forecast_pipeline_source"
 PRICE_MONITOR_TABLE = "price_increase_monitor"
 
-# the detector of price increases, over the uplift of those who never had a softcancel:
+# the detector of price increases, over the uplift of the isolated renewals (no retention event):
 PRICE_STEP_THRESHOLD = 0.03    # a month this far above the average of its previous 12 is above the threshold
 PERSISTENCE_MONTHS = 3         # an increase is a step that STAYS: this many consecutive months above the threshold
                                # (one noisy month is not an increase; the price of it: a step is confirmed 2 months late)
@@ -163,25 +165,26 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
 
 
 def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> pd.DataFrame:
-    """One row per closed pipeline month: the uplift of everyone, the uplift of those who never had a
-    softcancel, and the detection of price increases over it.
+    """One row per closed pipeline month: the uplift of everyone, the uplift of the ISOLATED renewals
+    (the normal renewal process, no retention event), and the detection of price increases over it.
 
-    INPUT:   the core. Its columns are read IF PRESENT, by name: the exact uplift base
-             (forecast_to_renew_USD_renewed), the never-softcancel measures
-             (forecast_to_renew_units_without_softcancel, forecast_renewed_units_without_softcancel,
-             forecast_renewed_USD_without_softcancel) and their exact base
-             (forecast_to_renew_USD_renewed_without_softcancel). Each uplift uses its exact base when it
-             is there and the approximation renewed units × the row's due price when it is not.
-    OUTPUT:  one row per period: uplift, uplift_never_softcancel, share_due_never_softcancel,
-             rate_units_never_softcancel, uplift_previous_12 (average of the previous 12 months, NaN with
-             fewer than MIN_REFERENCE_MONTHS), uplift_step (the month over that average, − 1),
-             above_threshold (step ≥ PRICE_STEP_THRESHOLD), price_increase_flag (1 in the FIRST month of
-             a run of ≥ PERSISTENCE_MONTHS months above the threshold: an increase is a step that stays,
-             one noisy month is not), in_increase_cycle (a flagged month in this or the previous
-             CYCLE_MONTHS − 1 months) and months_since_increase. A run still too short at the end of the
-             history is not flagged yet: it is confirmed when its months close.
-    RULES:   the detector runs on the never-softcancel uplift when its columns are present (no retention
-             discounts in it), on the plain uplift otherwise; attrs["detector_series"] says which.
+    INPUT:   the core. The closed-month measures are read IF PRESENT, by their fixed core names
+             (CORE_* in config.py, whatever the extract calls them): the exact uplift base and the four
+             isolated measures. Each metric needs only its own columns, so a missing one blanks only the
+             metrics that use it. Each uplift uses its exact base when it is there and the approximation
+             renewed units × the row's due price when it is not.
+    OUTPUT:  one row per period: uplift, uplift_isolated, share_due_isolated, rate_units_isolated,
+             desv_isolated (the std deviation of the ratio between isolated licences),
+             share_isolated_near_100 (their value in [0.95, 1.05)), share_isolated_ge110 (at or above 1.10),
+             uplift_previous_12 (average of the previous 12 months, NaN with fewer than
+             MIN_REFERENCE_MONTHS), uplift_step (the month over that average, − 1), above_threshold (step
+             ≥ PRICE_STEP_THRESHOLD), price_increase_flag (1 in the FIRST month of a run of ≥
+             PERSISTENCE_MONTHS months above the threshold: an increase is a step that stays, one noisy
+             month is not), in_increase_cycle (a flagged month in this or the previous CYCLE_MONTHS − 1
+             months) and months_since_increase. A run still too short at the end of the history is not
+             flagged yet: it is confirmed when its months close.
+    RULES:   the detector runs on uplift_isolated when it can be computed (no retention discounts in it),
+             on the plain uplift otherwise; attrs["detector_series"] says which.
              A price increase raises the uplift of the renewals of ONE cycle: who renews pays the new
              tariff against the old one. A cycle later everyone due already bought at the new tariff and
              the step fades, so in_increase_cycle marks exactly CYCLE_MONTHS months per detected step.
@@ -190,39 +193,49 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
                         & (core_table["forecast_to_renew_units"] > 0)].copy()
     closed["_precio_fila"] = closed["forecast_to_renew_USD"] / closed["forecast_to_renew_units"]
     closed["_base_aproximada"] = closed["forecast_renewed_units"] * closed["_precio_fila"]
-    exact_base_column = "forecast_to_renew_USD_renewed"
-    never_softcancel_columns = ["forecast_to_renew_units_without_softcancel", "forecast_renewed_units_without_softcancel",
-                                "forecast_renewed_USD_without_softcancel"]
-    never_softcancel_exact_base_column = "forecast_to_renew_USD_renewed_without_softcancel"
-    with_exact_base = exact_base_column in closed.columns
-    with_never_softcancel = all(column in closed.columns for column in never_softcancel_columns)
-    with_never_softcancel_exact_base = never_softcancel_exact_base_column in closed.columns
-    if with_never_softcancel:
-        closed["_base_aproximada_nunca_sc"] = closed["forecast_renewed_units_without_softcancel"] * closed["_precio_fila"]
+    present = set(closed.columns)
+    if CORE_ISOLATED_RENEWED_UNITS in present:
+        closed["_base_aproximada_isolated"] = closed[CORE_ISOLATED_RENEWED_UNITS] * closed["_precio_fila"]
 
     summed = closed.groupby("period").sum(numeric_only=True)
     monitor = pd.DataFrame(index=summed.index)
     monitor["renewed_units"] = summed["forecast_renewed_units"]
-    uplift_base = summed[exact_base_column] if with_exact_base else summed["_base_aproximada"]
+    uplift_base = summed[CORE_RENEWED_PIPELINE_USD] if CORE_RENEWED_PIPELINE_USD in present else summed["_base_aproximada"]
     monitor["uplift"] = summed["forecast_renewed_USD"] / uplift_base.where(uplift_base > 0)
-    if with_never_softcancel:
-        monitor["share_due_never_softcancel"] = (summed["forecast_to_renew_units_without_softcancel"]
-                                                 / summed["forecast_to_renew_units"])
-        due_never = summed["forecast_to_renew_units_without_softcancel"]
-        monitor["rate_units_never_softcancel"] = (summed["forecast_renewed_units_without_softcancel"]
-                                                  / due_never.where(due_never > 0))
-        base_never = (summed[never_softcancel_exact_base_column] if with_never_softcancel_exact_base
-                      else summed["_base_aproximada_nunca_sc"])
-        monitor["uplift_never_softcancel"] = (summed["forecast_renewed_USD_without_softcancel"]
-                                              / base_never.where(base_never > 0))
-    else:
-        monitor["share_due_never_softcancel"] = np.nan
-        monitor["rate_units_never_softcancel"] = np.nan
-        monitor["uplift_never_softcancel"] = np.nan
+
+    # the isolated renewals: each metric with the columns it needs, and nothing else
+    monitor["share_due_isolated"] = np.nan
+    monitor["rate_units_isolated"] = np.nan
+    monitor["uplift_isolated"] = np.nan
+    if CORE_ISOLATED_PIPELINE_UNITS in present:
+        monitor["share_due_isolated"] = summed[CORE_ISOLATED_PIPELINE_UNITS] / summed["forecast_to_renew_units"]
+        if CORE_ISOLATED_RENEWED_UNITS in present:
+            due_isolated = summed[CORE_ISOLATED_PIPELINE_UNITS]
+            monitor["rate_units_isolated"] = summed[CORE_ISOLATED_RENEWED_UNITS] / due_isolated.where(due_isolated > 0)
+    isolated_base = (summed[CORE_ISOLATED_RENEWED_PIPELINE_USD] if CORE_ISOLATED_RENEWED_PIPELINE_USD in present
+                     else summed["_base_aproximada_isolated"] if CORE_ISOLATED_RENEWED_UNITS in present else None)
+    if CORE_ISOLATED_RENEWED_USD in present and isolated_base is not None:
+        monitor["uplift_isolated"] = summed[CORE_ISOLATED_RENEWED_USD] / isolated_base.where(isolated_base > 0)
+
+    # the dispersion of the isolated renewals, licence by licence (from the sums the extract builds per licence)
+    monitor["desv_isolated"] = np.nan
+    monitor["share_isolated_near_100"] = np.nan
+    monitor["share_isolated_ge110"] = np.nan
+    if CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR in present and CORE_ISOLATED_RENEWED_PIPELINE_USD in present:
+        monitor["desv_isolated"] = weighted_ratio_spread(summed[CORE_ISOLATED_RENEWED_PIPELINE_USD],
+                                                         summed[CORE_ISOLATED_RENEWED_USD],
+                                                         summed[CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR])
+    band_columns = {short_name: CORE_ISOLATED_BAND_PREFIX + short_name for _, short_name, _, _ in ISOLATED_RATIO_BANDS}
+    if all(column in present for column in band_columns.values()):
+        band_total = summed[list(band_columns.values())].sum(axis=1)
+        near = summed[band_columns["095_100"]] + summed[band_columns["100_105"]]
+        high = summed[band_columns["110_120"]] + summed[band_columns["ge120"]]
+        monitor["share_isolated_near_100"] = near / band_total.where(band_total > 0)
+        monitor["share_isolated_ge110"] = high / band_total.where(band_total > 0)
     monitor = monitor.sort_index().reset_index()
 
     # the detector: the chosen series against the average of its previous 12 months
-    detector_series = "uplift_never_softcancel" if with_never_softcancel else "uplift"
+    detector_series = "uplift_isolated" if monitor["uplift_isolated"].notna().any() else "uplift"
     detector = monitor[detector_series]
     monitor["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=MIN_REFERENCE_MONTHS).mean()
     monitor["uplift_step"] = detector / monitor["uplift_previous_12"] - 1

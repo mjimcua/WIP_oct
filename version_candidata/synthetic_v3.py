@@ -25,6 +25,8 @@ FEATURE-COVERAGE MATRIX (feature → scenario), kept from v2 and extended:
 """
 
 # ─── imports ─────────────────────────────────────────────────────────────────────
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -142,6 +144,21 @@ def build_raw(seed: int = 7, with_discount_pct: bool = False) -> pd.DataFrame:
     renewed_units_share = (raw["total_renewed_units_without_softcancel"]
                            / raw["total_renewed_units"].where(raw["total_renewed_units"] > 0)).fillna(0.0)
     raw["total_tr_usd_renewed_without_softcancel"] = raw["total_tr_usd_renewed"] * renewed_units_share
+    # the dispersion of the isolated renewals, as the extract builds it licence by licence: here every row's
+    # licences spread around its mean ratio with a row-level standard deviation; the second moment is then
+    # base × (sd² + mean²) and the base is split into the six ratio bands by the normal probabilities
+    dispersion_rng = np.random.default_rng(seed + 3000)
+    isolated_base = raw["total_tr_usd_renewed_without_softcancel"].fillna(0.0)
+    isolated_renewed = raw["total_renewed_usd_without_softcancel"].fillna(0.0)
+    mean_ratio = (isolated_renewed / isolated_base.where(isolated_base > 0)).fillna(1.0).to_numpy()
+    spread = dispersion_rng.uniform(0.02, 0.08, len(raw))
+    raw["total_renewed_usd_sq_over_tr_isolated"] = isolated_base * (spread ** 2 + mean_ratio ** 2)
+    edges = [0.95, 1.00, 1.05, 1.10, 1.20]
+    normal_cdf = np.vectorize(lambda z: 0.5 * (1.0 + math.erf(z / math.sqrt(2.0))))
+    cumulative = [normal_cdf((edge - mean_ratio) / spread) for edge in edges]
+    shares = [cumulative[0]] + [cumulative[i] - cumulative[i - 1] for i in range(1, len(edges))] + [1 - cumulative[-1]]
+    for band_name, share in zip(["lt095", "095_100", "100_105", "105_110", "110_120", "ge120"], shares):
+        raw[f"total_tr_usd_renewed_isolated_{band_name}"] = isolated_base * share
     if with_discount_pct:
         # the exact discount in tanto por 1 (0.4 for the d40 bucket, 0.0 for d0), UNKNOWN (null) in the kiosk channel
         raw["discount_pct"] = np.where(raw["channel"] == "kiosk", np.nan, np.where(raw["discount"] == "d40", 0.4, 0.0))

@@ -96,7 +96,13 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 - **El padre de una celda de uplift descarta los extras de revalorización** (`msrp_increased`, `price_cap`): al heredar mezcla regímenes de precio (sospecha H2; pendiente de F2 con datos reales).
 - **La auditoría no verifica el uplift por su cuenta**: sus `expected_usd_*` vienen de `esperado_usd` del forecast; su independencia cubre la cadena de tasas, no la de precio.
 - **La GUIA describe el uplift con la redacción y los recuentos de una ejecución anterior**: actualizar al revisar la próxima salida de consola.
-- Resueltos en la misma revisión: el detector sin softcancel ya usa su base exacta (`total_tr_usd_renewed_without_softcancel`), y el backtest del uplift (paso 16) juzga con la base que usará el forecast (unidades renovadas × precio medio de la fila), no con la exacta de los renovadores.
+- Resueltos en la misma revisión: el detector de subidas usa la base exacta de las renovaciones isolated (`isolated_renewed_pipeline_usd_col`), y el backtest del uplift (paso 16) juzga con la base que usará el forecast (unidades renovadas × precio medio de la fila), no con la exacta de los renovadores.
+
+## Renovaciones isolated (4-oct-2026)
+- Las medidas sin softcancel pasan a ser configuraciones individuales, como el resto de medidas de la firma: `isolated_pipeline_units_col`, `isolated_renewed_units_col`, `isolated_renewed_usd_col`, `isolated_renewed_pipeline_usd_col`. "Isolated" = renovaciones del proceso normal, aisladas de cualquier evento de retención; "sin softcancel" es como lo construye Kamelot. En el núcleo, nombres fijos `forecast_isolated_*`.
+
+## Dispersión de las renovaciones isolated (4-oct-2026)
+- Siete medidas nuevas en la firma (el momento de segundo orden y seis tramos de ratio), construidas licencia a licencia: la acción 9 del paso 15 lee las isolated licencia a licencia (desviación típica, histograma por tramos, cerca de 1 y ≥ 1,10, por descuento, serie y mes) y el monitor del paso 22 las lleva a Power BI. Las isolated ya exigen mismo producto, sin upgrades, sin softcancel y no adquisición.
 
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).

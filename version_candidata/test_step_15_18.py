@@ -62,7 +62,10 @@ def test_steps_15_to_18() -> None:
     same_cell = homogeneity[homogeneity["uplift_cell_id"] == one_cell["uplift_cell_id"]].iloc[0]
     check(abs(same_cell["uplift_aproximado"] - same_cell["uplift_exacto"] * same_cell["ratio_seleccion"]) < 1e-9,
           "homogeneity: the approximate uplift = the exact one × the selection ratio (the old base hid that factor)")
-    check("the claim '100-105 %':" in console and "histogram · every series in the distribution" in console
+    check("LICENCE BY LICENCE, the isolated renewals: mean ratio" in console and "std deviation between licences" in console
+          and "histogram · the value of the isolated renewals by renewal ratio" in console,
+          "the revaluation report reads the isolated renewals licence by licence: std deviation and ratio bands")
+    check("between SERIES" in console and "histogram · every series in the distribution" in console
           and "█" in console and "month by month (24 closed" in console,
           "the revaluation report prints the claim, the histogram and the monthly path on screen (action 9)")
     check(results["uplift_verdict"]["via_usada_con_descuento"] == "estadistica",

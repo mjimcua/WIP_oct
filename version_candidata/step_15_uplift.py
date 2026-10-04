@@ -36,7 +36,7 @@ Actions (logged as they are done):
   7. count the checks; stop if any failed
   8. show the uplift by origin, the contract rule and the homogeneity by discount bucket
   9. the revaluation of the renewers, read for business: the population of the claim
-     (no softcancel, no acquisition, renewing), where its uplift sits (percentiles,
+     (isolated renewals, no acquisition), where its uplift sits (percentiles,
      histogram by series), the discount split and the monthly path with its steps
 
 Checks (logged as they are made, numbered, at the level of their status):
@@ -54,7 +54,7 @@ homogeneity · tables sff_uplift_celda, sff_uplift_contrato_check, sff_uplift_ho
 import numpy as np
 import pandas as pd
 
-from config import Config, join_columns
+from config import ISOLATED_RATIO_BANDS, Config, join_columns, weighted_ratio_spread
 from vocabulario import (CALENDAR_ROLE_COLUMN, SERIES_ID_COLUMN, TABLE_CONTRACT_CHECK, TABLE_UPLIFT_CELLS,
                          TABLE_UPLIFT_HOMOGENEITY, TRUTH_ROLES, UPLIFT_CELL, UPLIFT_CELL_ID_COLUMN, UPLIFT_GLOBAL,
                          UPLIFT_OWN, UPLIFT_PARENT, WILDCARD)
@@ -190,63 +190,179 @@ def histogram_lines(series_table: pd.DataFrame, title: str) -> list:
     return lines
 
 
+def report_population(rows: pd.DataFrame, configuration: Config) -> tuple:
+    """The population of the revaluation report, with its own measures in _rep_* columns.
+
+    The ISOLATED renewals when the Config declares them (isolated_renewed_usd_col, and its base:
+    isolated_renewed_pipeline_usd_col, exact, or isolated_renewed_units_col × the row's due price,
+    approximate); every renewer otherwise. Acquisitions out (acquisition_column / acquisition_values).
+    Returns (population, funnel rows as (label, frame, usd column), population text, base text).
+    """
+    row_price = rows[configuration.pipeline_usd_col] / rows[configuration.pipeline_units_col]
+    funnel_rows = [("renewer rows", rows, "_numerador")]
+    if configuration.isolated_renewed_usd_col and (configuration.isolated_renewed_pipeline_usd_col
+                                                   or configuration.isolated_renewed_units_col):
+        population = rows.copy()
+        population["_rep_numerador"] = population[configuration.isolated_renewed_usd_col]
+        if configuration.isolated_renewed_pipeline_usd_col:
+            population["_rep_denominador"] = population[configuration.isolated_renewed_pipeline_usd_col]
+            base_text = "exact (what the isolated renewers were worth)"
+        else:
+            population["_rep_denominador"] = population[configuration.isolated_renewed_units_col] * row_price
+            base_text = "APPROXIMATE (isolated renewed units × the row's due price)"
+        population["_rep_renovadas"] = (population[configuration.isolated_renewed_units_col]
+                                        if configuration.isolated_renewed_units_col
+                                        else population[configuration.renewed_units_col])
+        population["_rep_vencen_unidades"] = (population[configuration.isolated_pipeline_units_col]
+                                              if configuration.isolated_pipeline_units_col
+                                              else population[configuration.pipeline_units_col])
+        population = population[population["_rep_denominador"] > 0].copy()
+        add_licence_level_columns(population, configuration)
+        funnel_rows.append(("· isolated renewals (normal process, no retention event)", population, "_rep_numerador"))
+        population_text = "the ISOLATED renewals"
+    else:
+        population = rows.copy()
+        population["_rep_numerador"] = population["_numerador"]
+        population["_rep_denominador"] = population["_denominador"]
+        population["_rep_renovadas"] = population[configuration.renewed_units_col]
+        population["_rep_vencen_unidades"] = population[configuration.pipeline_units_col]
+        base_text = ("exact (what the renewers were worth)" if configuration.renewed_pipeline_usd_col
+                     else "APPROXIMATE (renewed units × the row's due price)")
+        population_text = "EVERY renewer (the isolated renewals are not declared in the Config)"
+        for helper_column in ["_rep_momento", "_rep_cerca_100", "_rep_mas_110"]:
+            population[helper_column] = np.nan                     # the licence level only exists for the isolated
+    if configuration.acquisition_column and configuration.acquisition_column in population.columns:
+        population = population[~population[configuration.acquisition_column].isin(configuration.acquisition_values)]
+        funnel_rows.append((f"· and not an acquisition ({configuration.acquisition_column})", population, "_rep_numerador"))
+    return population, funnel_rows, population_text, base_text
+
+
+def add_licence_level_columns(population: pd.DataFrame, configuration: Config) -> None:
+    """The licence-level measures of the isolated renewals, in _rep_* columns (NaN when not declared):
+    the second moment (for the std deviation), the value in [0.95, 1.05) and the value at or above 1.10."""
+    moment_column = configuration.isolated_renewed_usd_sq_over_tr_col
+    population["_rep_momento"] = population[moment_column] if moment_column else np.nan
+    bands = configuration.isolated_ratio_bands
+    near_columns = [column for column, _, low, high, _ in bands if low >= 0.95 and high <= 1.05]
+    high_columns = [column for column, _, low, _, _ in bands if low >= 1.10]
+    complete = len(bands) == len(ISOLATED_RATIO_BANDS)
+    population["_rep_cerca_100"] = population[near_columns].sum(axis=1) if complete else np.nan
+    population["_rep_mas_110"] = population[high_columns].sum(axis=1) if complete else np.nan
+
+
+def licence_level_summary(population: pd.DataFrame, group_column: str, configuration: Config) -> pd.DataFrame:
+    """Per group: the value renewed, the uplift, and (when the extract carries them) the std deviation of the
+    ratio between licences and the share of the value near 1 and at or above 1.10."""
+    summary = (population.groupby(group_column, dropna=False)
+               .agg(usd_renovado=("_rep_numerador", "sum"), base=("_rep_denominador", "sum"),
+                    momento=("_rep_momento", "sum"), cerca=("_rep_cerca_100", "sum"), alto=("_rep_mas_110", "sum")))
+    summary["uplift"] = (summary["usd_renovado"] / summary["base"]).round(3)
+    with_moment, with_bands = population["_rep_momento"].notna().any(), population["_rep_cerca_100"].notna().any()
+    summary["desv"] = (weighted_ratio_spread(summary["base"], summary["usd_renovado"], summary["momento"]).round(3)
+                       if with_moment else np.nan)
+    summary["cerca_100"] = (summary["cerca"] / summary["base"]).round(3) if with_bands else np.nan
+    summary["mas_110"] = (summary["alto"] / summary["base"]).round(3) if with_bands else np.nan
+    summary["usd_renovado"] = summary["usd_renovado"].round(0)
+    return summary.reset_index().drop(columns=["base", "momento", "cerca", "alto"])
+
+
+def licence_level_report(population: pd.DataFrame, configuration: Config) -> None:
+    """The isolated renewals licence by licence (from the sums the extract builds per licence): the weighted
+    std deviation of the ratio, the histogram of the six ratio bands, and the verdict on the claim "renewing
+    the same product with no retention event, a licence renews at about its value"."""
+    doc = configuration.logger.doc
+    base = population["_rep_denominador"].sum()
+    renewed = population["_rep_numerador"].sum()
+    mean_ratio = renewed / base
+    spread_text = ""
+    if population["_rep_momento"].notna().any():
+        spread = float(weighted_ratio_spread(pd.Series([base]), pd.Series([renewed]),
+                                             pd.Series([population["_rep_momento"].sum()])).iloc[0])
+        spread_text = f" · std deviation between licences {spread:.3f} (two thirds of the value within ±{spread:.1%})"
+    doc(f"[{STEP_LABEL}] LICENCE BY LICENCE, the isolated renewals: mean ratio {mean_ratio:.3f}{spread_text}")
+    bands = configuration.isolated_ratio_bands
+    if len(bands) != len(ISOLATED_RATIO_BANDS):
+        return
+    values = [population[column].sum() for column, _, _, _, _ in bands]
+    total = max(sum(values), 1e-9)
+    longest = max(max(values) / total, 1e-9)
+    doc(f"[{STEP_LABEL}] histogram · the value of the isolated renewals by renewal ratio, licence by licence")
+    doc(f"[{STEP_LABEL}] {'ratio':>13}  {'USD que valían':>16}  {'% valor':>7}")
+    for (_, _, _, _, label), value in zip(bands, values):
+        bar = "█" * int(round(REPORT_HISTOGRAM_WIDTH * (value / total) / longest)) if value > 0 else ""
+        doc(f"[{STEP_LABEL}] {label:>13}  {value:>16,.0f}  {value / total:>7.1%}  {bar}")
+    near = population["_rep_cerca_100"].sum() / total
+    high = population["_rep_mas_110"].sum() / total
+    if near >= 0.80:
+        verdict = (f"the claim HOLDS: {near:.0%} of the value renews within ±5 % of what it was worth; the uplift of "
+                   f"this population is price, not behaviour")
+    elif high >= 0.25:
+        verdict = (f"the claim does NOT hold: {high:.0%} of the value renews 10 % or more above what it was worth and "
+                   f"only {near:.0%} within ±5 %. With the same product and no retention event, that is a price "
+                   f"increase or a discount that ends; the monthly path below says which")
+    else:
+        verdict = (f"the claim holds only in part: {near:.0%} of the value within ±5 %, {high:.0%} at or above 1.10")
+    doc(f"[{STEP_LABEL}] VALORACIÓN: {verdict}")
+
+
 def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
     """Action 9: the revaluation of the renewers, read for business, on screen only.
 
     INPUT:   the renewer rows of action 1 (closed months, renewed > 0, with the uplift base in
              _denominador: exact when the extract carries it, approximate otherwise).
-    OUTPUT:  nothing returned, nothing written: the funnel of the population (no softcancel, no
+    OUTPUT:  nothing returned, nothing written: the funnel of the population (isolated renewals, no
              acquisition), where the uplift of its heavy series sits (aggregate, weighted percentiles,
              histogram), the discount split, the 15 biggest series and the monthly path with its steps.
-    RULES:   the softcancel filter uses the column named "softcancel" when the extract has one (logged
-             when it does not); the acquisition filter uses acquisition_column / acquisition_values of
-             the Config. A series enters the distribution when it averages ≥ REPORT_UNITS_FLOOR units
-             due per month in the window, or is among the REPORT_TOP_SERIES biggest by USD due.
+    RULES:   the population is the ISOLATED renewals (isolated_* of the Config: the normal renewal
+             process, no retention event) when they are declared, every renewer otherwise (logged);
+             the acquisition filter uses acquisition_column / acquisition_values. See report_population.
+             A series enters the distribution when it averages ≥ REPORT_UNITS_FLOOR units due per month
+             in the window, or is among the REPORT_TOP_SERIES biggest by USD due.
     EDGE CASES: with no series past the floor, the report says so and stops; a single series still
              gets its percentiles (they are all its own uplift).
     """
     doc = configuration.logger.doc
     closed_periods = sorted(renewers[configuration.period_col].unique())
     window = closed_periods[-REPORT_WINDOW_MONTHS:]
-    population = renewers[renewers[configuration.period_col].isin(window)]
-    funnel_rows = [("renewer rows of the window", population)]
-    if "softcancel" in population.columns:
-        population = population[population["softcancel"] == 0]
-        funnel_rows.append(("· without softcancel (the row's mark)", population))
-    else:
-        doc(f"[{STEP_LABEL}] no column named softcancel in the extract: that filter is skipped")
-    if configuration.acquisition_column and configuration.acquisition_column in population.columns:
-        population = population[~population[configuration.acquisition_column].isin(configuration.acquisition_values)]
-        funnel_rows.append((f"· and not an acquisition ({configuration.acquisition_column})", population))
-    population = population[population["_denominador"] > 0]
-    base_text = ("exact (what the renewers were worth)" if configuration.renewed_pipeline_usd_col
-                 else "APPROXIMATE (renewed units × the row's due price: declare renewed_pipeline_usd_col for the exact one)")
-    doc(f"[{STEP_LABEL}] window {window[0]} to {window[-1]} · uplift base: {base_text}")
+    population, funnel_rows, population_text, base_text = report_population(
+        renewers[renewers[configuration.period_col].isin(window)], configuration)
+    doc(f"[{STEP_LABEL}] window {window[0]} to {window[-1]} · population: {population_text} · uplift base: {base_text}")
     configuration.show_table(pd.DataFrame([{"population": label, "rows": len(stage),
-                                            "usd_renovado": round(float(stage["_numerador"].sum()))}
-                                           for label, stage in funnel_rows]))
+                                            "usd_renovado": round(float(stage[usd_column].sum()))}
+                                           for label, stage, usd_column in funnel_rows]))
 
     # one row per forecast series over its months of the window; the heavy ones
     discount = configuration.discount_value_column
     per_series = (population.groupby(SERIES_ID_COLUMN)
                   .agg(meses=(configuration.period_col, "nunique"),
-                       vencen_unidades=(configuration.pipeline_units_col, "sum"),
+                       vencen_unidades=("_rep_vencen_unidades", "sum"),
                        vencen_usd=(configuration.pipeline_usd_col, "sum"),
-                       renovadas=(configuration.renewed_units_col, "sum"),
-                       usd_renovado=("_numerador", "sum"),
-                       base=("_denominador", "sum"),
-                       usd_desconocido=("_numerador", lambda values:
+                       renovadas=("_rep_renovadas", "sum"),
+                       usd_renovado=("_rep_numerador", "sum"),
+                       base=("_rep_denominador", "sum"),
+                       momento=("_rep_momento", "sum"),
+                       cerca_100=("_rep_cerca_100", "sum"),
+                       mas_110=("_rep_mas_110", "sum"),
+                       usd_desconocido=("_rep_numerador", lambda values:
                                         values[population.loc[values.index, discount].isna()].sum() if discount else 0.0))
                   .reset_index())
     per_series["unidades_mes"] = per_series["vencen_unidades"] / per_series["meses"]
     per_series["tasa_unidades"] = per_series["renovadas"] / per_series["vencen_unidades"]
     per_series["uplift"] = per_series["usd_renovado"] / per_series["base"]
+    with_licence_level = population["_rep_momento"].notna().any()
+    with_bands = population["_rep_cerca_100"].notna().any()
+    per_series["desv"] = (weighted_ratio_spread(per_series["base"], per_series["usd_renovado"], per_series["momento"])
+                          if with_licence_level else np.nan)
+    per_series["cerca_100"] = per_series["cerca_100"] / per_series["base"] if with_bands else np.nan
+    per_series["mas_110"] = per_series["mas_110"] / per_series["base"] if with_bands else np.nan
     biggest = per_series.nlargest(REPORT_TOP_SERIES, "vencen_usd")[SERIES_ID_COLUMN]
     selected = per_series[(per_series["unidades_mes"] >= REPORT_UNITS_FLOOR)
                           | per_series[SERIES_ID_COLUMN].isin(set(biggest))].copy()
     if not len(selected):
         doc(f"[{STEP_LABEL}] no series past the floor ({REPORT_UNITS_FLOOR:,.0f} units due per month): nothing to show")
         return
+    if with_licence_level or with_bands:
+        licence_level_report(population, configuration)
     covered = selected["usd_renovado"].sum() / max(per_series["usd_renovado"].sum(), 1e-9)
     doc(f"[{STEP_LABEL}] {len(selected):,} series in the distribution (floor {REPORT_UNITS_FLOOR:,.0f} units/month or "
         f"top {REPORT_TOP_SERIES} by USD due): {covered:.0%} of the renewed USD of the population")
@@ -260,9 +376,11 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
     share_above_110 = weights[uplifts >= 1.10].sum() / weights.sum()
     doc(f"[{STEP_LABEL}] aggregate uplift {selected['usd_renovado'].sum() / selected['base'].sum():.3f} · weighted "
         f"percentiles p10 {p10:.3f} · p25 {p25:.3f} · MEDIAN {p50:.3f} · p75 {p75:.3f} · p90 {p90:.3f}")
-    doc(f"[{STEP_LABEL}] the claim '100-105 %': {share_100_105:.0%} of the renewed USD sits in [1.00, 1.05) · "
-        f"{share_095_105:.0%} in [0.95, 1.05) · {share_above_110:.0%} at or above 1.10")
-    if share_above_110 > 0.15:
+    doc(f"[{STEP_LABEL}] between SERIES (each series at its mean): {share_100_105:.0%} of the renewed USD in series "
+        f"whose uplift sits in [1.00, 1.05) · {share_095_105:.0%} in [0.95, 1.05) · {share_above_110:.0%} at or above 1.10")
+    if with_bands:
+        pass                                          # the licence level above already answered the claim
+    elif share_above_110 > 0.15:
         doc(f"[{STEP_LABEL}] VALORACIÓN: a heavy tail at or above 1.10. Look at its discount buckets below: a tail in "
             f"high KNOWN buckets is the contract losing its discount (legitimate); one in the unknown bucket is the "
             f"statistical path and deserves the homogeneity table")
@@ -274,15 +392,11 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
 
     if discount:
         known_label = np.where(population[discount].notna(), "discount known", "discount unknown")
-        by_known = (population.assign(_corte=known_label).groupby("_corte")
-                    .agg(vencen_usd=(configuration.pipeline_usd_col, "sum"), usd_renovado=("_numerador", "sum"),
-                         base=("_denominador", "sum")))
-        by_known["uplift"] = (by_known["usd_renovado"] / by_known["base"]).round(3)
-        configuration.show_table(by_known.reset_index().drop(columns=["base"]))
-        by_bucket = (population.groupby(configuration.discount_bucket_column, dropna=False)
-                     .agg(usd_renovado=("_numerador", "sum"), base=("_denominador", "sum")))
-        by_bucket["uplift"] = (by_bucket["usd_renovado"] / by_bucket["base"]).round(3)
-        configuration.show_table(by_bucket.reset_index().drop(columns=["base"]))
+        by_known = licence_level_summary(population.assign(_corte=known_label), "_corte", configuration)
+        configuration.show_table(by_known)
+        doc(f"[{STEP_LABEL}] by discount bucket (desv = the std deviation of the ratio between licences; cerca_100 = "
+            f"share of the value in [0.95, 1.05); mas_110 = share at or above 1.10):")
+        configuration.show_table(licence_level_summary(population, configuration.discount_bucket_column, configuration))
 
     for line in histogram_lines(selected, "every series in the distribution"):
         doc(f"[{STEP_LABEL}] {line}")
@@ -292,31 +406,33 @@ def revaluation_report(renewers: pd.DataFrame, configuration: Config) -> None:
             doc(f"[{STEP_LABEL}] {line}")
 
     top = selected.nlargest(15, "vencen_usd")[[SERIES_ID_COLUMN, "meses", "unidades_mes", "vencen_usd",
-                                               "tasa_unidades", "uplift"]].copy()
+                                               "tasa_unidades", "uplift", "desv", "cerca_100", "mas_110"]].copy()
     top["unidades_mes"] = top["unidades_mes"].round(0)
-    top["tasa_unidades"] = top["tasa_unidades"].round(3)
-    top["uplift"] = top["uplift"].round(3)
+    for rounded_column in ["tasa_unidades", "uplift", "desv", "cerca_100", "mas_110"]:
+        top[rounded_column] = top[rounded_column].round(3)
     doc(f"[{STEP_LABEL}] the 15 series with the most USD due:")
     configuration.show_table(top)
 
     # the monthly path of the same population, over a longer window: steps betray a price increase
     monthly_window = closed_periods[-REPORT_MONTHLY_MONTHS:]
-    monthly_population = renewers[renewers[configuration.period_col].isin(monthly_window) & (renewers["_denominador"] > 0)]
-    if "softcancel" in monthly_population.columns:
-        monthly_population = monthly_population[monthly_population["softcancel"] == 0]
-    if configuration.acquisition_column and configuration.acquisition_column in monthly_population.columns:
-        monthly_population = monthly_population[~monthly_population[configuration.acquisition_column]
-                                                .isin(configuration.acquisition_values)]
+    monthly_population = report_population(renewers[renewers[configuration.period_col].isin(monthly_window)],
+                                           configuration)[0]
     monthly = (monthly_population.groupby(configuration.period_col)
-               .agg(renovadas=(configuration.renewed_units_col, "sum"), usd_renovado=("_numerador", "sum"),
-                    base=("_denominador", "sum")).reset_index())
+               .agg(renovadas=("_rep_renovadas", "sum"), usd_renovado=("_rep_numerador", "sum"),
+                    base=("_rep_denominador", "sum"), momento=("_rep_momento", "sum"),
+                    cerca=("_rep_cerca_100", "sum"), alto=("_rep_mas_110", "sum")).reset_index())
     monthly["uplift"] = monthly["usd_renovado"] / monthly["base"]
+    monthly["desv"] = (weighted_ratio_spread(monthly["base"], monthly["usd_renovado"], monthly["momento"])
+                       if with_licence_level else np.nan)
+    monthly["cerca_100"] = monthly["cerca"] / monthly["base"] if with_bands else np.nan
+    monthly["mas_110"] = monthly["alto"] / monthly["base"] if with_bands else np.nan
     monthly["media_12_previos"] = monthly["uplift"].shift(1).rolling(window=12, min_periods=6).mean()
     monthly["escalon"] = monthly["uplift"] / monthly["media_12_previos"] - 1
     doc(f"[{STEP_LABEL}] month by month ({len(monthly)} closed, same population): escalon = the month over the average "
         f"of its previous 12")
-    shown = monthly.drop(columns=["usd_renovado", "base"]).copy()
-    shown["uplift"] = shown["uplift"].round(3)
+    shown = monthly.drop(columns=["usd_renovado", "base", "momento", "cerca", "alto"]).copy()
+    for rounded_column in ["uplift", "desv", "cerca_100", "mas_110"]:
+        shown[rounded_column] = shown[rounded_column].round(3)
     shown["media_12_previos"] = shown["media_12_previos"].round(3)
     shown["escalon"] = (100 * shown["escalon"]).round(1)
     configuration.show_table(shown.rename(columns={"escalon": "escalon_pct"}))
@@ -489,7 +605,7 @@ def estimate_uplift(fine_table: pd.DataFrame, configuration: Config) -> tuple:
                                  f"(ratio_realizacion 1 = the rule is exact):")
         configuration.show_table(check)
     # [9] the revaluation of the renewers, read for business
-    configuration.log_action(STEP_LABEL, 9, "the revaluation of the renewers (no softcancel, no acquisition, renewing): "
+    configuration.log_action(STEP_LABEL, 9, "the revaluation of the renewers (isolated renewals, no acquisition): "
                                             "population, distribution, discount split, monthly path")
     revaluation_report(renewers, configuration)
 

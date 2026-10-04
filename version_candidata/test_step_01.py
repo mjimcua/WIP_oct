@@ -14,6 +14,8 @@ import tempfile
 import numpy as np
 
 from config import roles_overview
+from config import (CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD, CORE_ISOLATED_RENEWED_UNITS,
+                    CORE_ISOLATED_RENEWED_USD, CORE_RENEWED_PIPELINE_USD)
 from main import run
 from step_00_validate_raw import validate_raw
 from step_01_values_and_levels import natural_key, validate_values_and_build_levels
@@ -52,8 +54,8 @@ def test_the_synthetic_values_are_usable() -> None:
     console = console_of(lambda: validate_values(raw, configuration))
     check("0 failed" in console, "the synthetic passes step 01")
     check("closed months:" in console, "the report shows the money of the closed months")
-    check(count_status(console, "ok") == 34 and "34 checks: 34 ok · 0 warnings · 0 failed" in console,
-          "the 34 checks are logged, numbered, each with its status, and counted (one header, one count)")
+    check(count_status(console, "ok") == 49 and "49 checks: 49 ok · 0 warnings · 0 failed" in console,
+          "the 49 checks are logged, numbered, each with its status, and counted (one header, one count)")
     check("purpose:" in console and "STEP 01 · VALUES AND DIMENSION LEVELS" in console, "the step logs its name and its purpose")
     returned = {}
     console_of(lambda: returned.setdefault("outputs", validate_values_and_build_levels(raw, configuration)))
@@ -228,9 +230,9 @@ def test_the_merge_threshold_and_its_evidence() -> None:
 
 
 def test_the_extra_renewal_measure() -> None:
-    print("I · the closed-month measures (those who never had a softcancel: units due, renewed units and USD)")
+    print("I · the closed-month measures (the exact uplift base and the isolated renewals), each by its Config field")
     raw, configuration = validated_synthetic()
-    measure = "total_renewed_usd_without_softcancel"
+    measure = configuration.isolated_renewed_usd_col
     closed = raw[configuration.period_col] < configuration.calendar_boundaries()["current"]
     negative = raw.copy()
     negative.loc[negative[closed].index[0], measure] = -5.0
@@ -246,17 +248,17 @@ def test_the_extra_renewal_measure() -> None:
     results = {}
     console_of(lambda: results.update(run(synthetic_with())))
     core = results["core"]
-    final_column = "forecast_renewed_USD_without_softcancel"
+    final_column = CORE_ISOLATED_RENEWED_USD
     actual_rows = (core["forecast_status"] == "actual") & (core["origen_fila"] == "raw")
     check(core.loc[actual_rows, final_column].notna().all() and core.loc[~actual_rows, final_column].isna().all(),
           "in the core it is filled in the closed months of the extract and empty elsewhere (it is not predicted)")
     check((core.loc[actual_rows & (core["softcancel"] == 1), final_column] == 0).all()
           and (core.loc[actual_rows, final_column] <= core.loc[actual_rows, "forecast_renewed_USD"] + 0.01).all(),
           "it is 0 where the row is marked softcancel and never above the renewed USD")
-    check({"forecast_to_renew_units_without_softcancel", "forecast_renewed_units_without_softcancel"} <= set(core.columns)
-          and (core.loc[actual_rows, "forecast_to_renew_units_without_softcancel"]
+    check({CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD} <= set(core.columns)
+          and (core.loc[actual_rows, CORE_ISOLATED_PIPELINE_UNITS]
                <= core.loc[actual_rows, "forecast_to_renew_units"] + 0.01).all(),
-          "the three measures reach the core with the names of the final block (tr → to_renew, usd → USD)")
+          "the isolated measures reach the core with the framework's fixed names, whatever the extract calls them")
     wiped = results["fine_table"]
     future = wiped[configuration.period_col] >= configuration.calendar_boundaries()["current"]
     check(wiped.loc[future, measure].isna().all(), "from the current month on it is wiped, like the renewals")
@@ -268,8 +270,19 @@ def test_the_extra_renewal_measure() -> None:
     console = console_of(lambda: validate_values(with_base, configuration))
     check(f"WARN  {base_column} is above 0 where something renewed" in console,
           "a renewer row without the uplift base is a warning (step 15 leaves it out of the uplift)")
-    check("forecast_to_renew_USD_renewed" in core.columns
-          and (core.loc[actual_rows, "forecast_to_renew_USD_renewed"]
+    broken_moment = raw.copy()
+    with_isolated_base = broken_moment[closed & (broken_moment[configuration.isolated_renewed_pipeline_usd_col] > 0)].index[0]
+    broken_moment.loc[with_isolated_base, configuration.isolated_renewed_usd_sq_over_tr_col] = 0.0
+    console = console_of(lambda: validate_values(broken_moment, configuration))
+    check(f"WARN  {configuration.isolated_renewed_usd_sq_over_tr_col} gives a variance ≥ 0" in console,
+          "a second moment below (Σ renewed)² / Σ base (a negative variance) is a warning: not built per licence")
+    broken_bands = raw.copy()
+    broken_bands.loc[with_isolated_base, configuration.isolated_tr_usd_renewed_ge120_col] += 50.0
+    console = console_of(lambda: validate_values(broken_bands, configuration))
+    check("WARN  the 6 ratio bands add up to" in console,
+          "six bands that do not add up to the isolated base are a warning (a licence in no band, or in two)")
+    check(CORE_RENEWED_PIPELINE_USD in core.columns
+          and (core.loc[actual_rows, CORE_RENEWED_PIPELINE_USD]
                <= core.loc[actual_rows, "forecast_to_renew_USD"] + 0.01).all(),
           "the exact uplift base reaches the core as forecast_to_renew_USD_renewed, never above the USD due")
 

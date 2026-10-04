@@ -83,11 +83,20 @@ def production_configuration() -> Config:
         # the exact base of the uplift: the USD that was falling due of the contracts that RENEWED (built per
         # licence and summed). With it, the uplift is pure revaluation, conditional on renewing
         renewed_pipeline_usd_col="total_tr_usd_renewed",
-        # only known once the month closes: the units due, renewed units and renewed USD of those who never had a
-        # softcancel (before, during or after the renewal), the reference to see a price increase without the
-        # retention discounts
-        closed_month_measure_cols=["total_tr_units_without_softcancel", "total_renewed_units_without_softcancel",
-                                   "total_renewed_usd_without_softcancel", "total_tr_usd_renewed_without_softcancel"],
+        # the ISOLATED renewals: here, the contracts that never had a softcancel (before, during or after the
+        # renewal): the reference to see a price increase without the retention discounts
+        isolated_pipeline_units_col="total_tr_units_without_softcancel",
+        isolated_renewed_units_col="total_renewed_units_without_softcancel",
+        isolated_renewed_usd_col="total_renewed_usd_without_softcancel",
+        isolated_renewed_pipeline_usd_col="total_tr_usd_renewed_without_softcancel",
+        # the dispersion of the isolated renewals (built per licence, summed): the second moment and six ratio bands
+        isolated_renewed_usd_sq_over_tr_col="total_renewed_usd_sq_over_tr_isolated",
+        isolated_tr_usd_renewed_lt095_col="total_tr_usd_renewed_isolated_lt095",
+        isolated_tr_usd_renewed_095_100_col="total_tr_usd_renewed_isolated_095_100",
+        isolated_tr_usd_renewed_100_105_col="total_tr_usd_renewed_isolated_100_105",
+        isolated_tr_usd_renewed_105_110_col="total_tr_usd_renewed_isolated_105_110",
+        isolated_tr_usd_renewed_110_120_col="total_tr_usd_renewed_isolated_110_120",
+        isolated_tr_usd_renewed_ge120_col="total_tr_usd_renewed_isolated_ge120",
         ignore_cols=["dataset_role", "is_current_month", "dummy_field", "row_id", "_filter"],   # [por confirmar]
         # the simulation window (current month → December): what happens in it falls due in 2027
         term_column="tr_term",
@@ -118,8 +127,18 @@ def synthetic_configuration() -> Config:
         discount_value_column="discount_pct",
         ignore_cols=["dataset_role", "is_current_month", "discount"],
         renewed_pipeline_usd_col="total_tr_usd_renewed",
-        closed_month_measure_cols=["total_tr_units_without_softcancel", "total_renewed_units_without_softcancel",
-                                   "total_renewed_usd_without_softcancel", "total_tr_usd_renewed_without_softcancel"],
+        isolated_pipeline_units_col="total_tr_units_without_softcancel",
+        isolated_renewed_units_col="total_renewed_units_without_softcancel",
+        isolated_renewed_usd_col="total_renewed_usd_without_softcancel",
+        isolated_renewed_pipeline_usd_col="total_tr_usd_renewed_without_softcancel",
+        # the dispersion of the isolated renewals (built per licence, summed): the second moment and six ratio bands
+        isolated_renewed_usd_sq_over_tr_col="total_renewed_usd_sq_over_tr_isolated",
+        isolated_tr_usd_renewed_lt095_col="total_tr_usd_renewed_isolated_lt095",
+        isolated_tr_usd_renewed_095_100_col="total_tr_usd_renewed_isolated_095_100",
+        isolated_tr_usd_renewed_100_105_col="total_tr_usd_renewed_isolated_100_105",
+        isolated_tr_usd_renewed_105_110_col="total_tr_usd_renewed_isolated_105_110",
+        isolated_tr_usd_renewed_110_120_col="total_tr_usd_renewed_isolated_110_120",
+        isolated_tr_usd_renewed_ge120_col="total_tr_usd_renewed_isolated_ge120",
         # the simulation window: acquisitions are newcust = 1
         acquisition_column="newcust",
         acquisition_values=[1],

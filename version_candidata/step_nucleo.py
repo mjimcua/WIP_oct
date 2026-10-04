@@ -52,7 +52,7 @@ Output: the core table and its legend · tables sff_nucleo, sff_nucleo_leyenda.
 import numpy as np
 import pandas as pd
 
-from config import Config, forecast_column_of_closed_month_measure, join_columns
+from config import Config, join_columns
 from vocabulario import (CALENDAR_ROLE_COLUMN, COMPOSITION_ID_COLUMN, COVERAGE_COLUMN, CURRENT_MONTH_COLUMN,
                          FINE_ROWS_COLUMN, PIPELINE_ORIGIN_COLUMN, PIPELINE_PROJECTED, PIPELINE_SIMULATED, ROLE_TEST,
                          ROLE_TRAIN, ROUTE_COLUMN, ROW_FROM_GAP, ROW_FROM_RAW, ROW_ORIGIN_COLUMN,
@@ -500,9 +500,8 @@ def add_final_block(core: pd.DataFrame, configuration: Config) -> pd.DataFrame:
     core["forecast_renewed_USD_low"] = np.where(with_band, column("s17_esperado_usd_bajo"), core["forecast_renewed_USD"])
     core["forecast_renewed_USD_high"] = np.where(with_band, column("s17_esperado_usd_alto"), core["forecast_renewed_USD"])
     # the closed-month measures: observed, not predicted: only in the closed months of the extract
-    for closed_month_column in configuration.all_closed_month_measure_cols:
-        core[forecast_column_of_closed_month_measure(closed_month_column)] = np.where(
-            raw_closed, column(f"s02_{closed_month_column}"), np.nan)
+    for measure in configuration.closed_month_measures:
+        core[measure.core_column] = np.where(raw_closed, column(measure.s02_column), np.nan)
     return core.drop(columns=[name for name in core.columns if name.startswith("_ts_")])
 
 
@@ -544,8 +543,8 @@ def rows_of_the_extract(fine_table: pd.DataFrame, dimension_columns: list, confi
     raw_rows["s02_es_mes_en_curso"] = fine_table[CURRENT_MONTH_COLUMN]
     raw_rows["s02_renovadas_unidades"] = fine_table[configuration.renewed_units_col]
     raw_rows["s02_renovado_usd"] = fine_table[configuration.renewed_usd_col]
-    for closed_month_column in configuration.all_closed_month_measure_cols:
-        raw_rows[f"s02_{closed_month_column}"] = fine_table[closed_month_column]
+    for measure in configuration.closed_month_measures:
+        raw_rows[measure.s02_column] = fine_table[measure.raw_column]
     raw_rows["s03_fs_id"] = fine_table[SERIES_ID_COLUMN]
     raw_rows["s03_fu_id"] = fine_table[UNIT_ID_COLUMN]
     raw_rows["s03_uplift_cell_id"] = fine_table[UPLIFT_CELL_ID_COLUMN]
@@ -643,12 +642,13 @@ def core_legend(core: pd.DataFrame, dimension_columns: list, blocks_present: lis
                 continue
             level = LEVEL_UNIT if name in unit_names else LEVEL_SERIES
             legend_rows.append((name, step, level, AGGREGATE_ATTRIBUTE, description))
-    for closed_month_column in configuration.all_closed_month_measure_cols:
-        legend_rows.append((f"s02_{closed_month_column}", "02", LEVEL_ROW, AGGREGATE_SUM,
-                            f"{closed_month_column} after the calendar (closed months; wiped from the current month on)"))
-        legend_rows.append((forecast_column_of_closed_month_measure(closed_month_column), "FIN", LEVEL_ROW, AGGREGATE_SUM,
-                            f"{closed_month_column}: observed in the closed months of the extract, empty elsewhere "
-                            f"(it is only known once the month closes) · SUM"))
+    for measure in configuration.closed_month_measures:
+        legend_rows.append((measure.s02_column, "02", LEVEL_ROW, AGGREGATE_SUM,
+                            f"{measure.config_field} ({measure.raw_column}) after the calendar (closed months; wiped "
+                            f"from the current month on)"))
+        legend_rows.append((measure.core_column, "FIN", LEVEL_ROW, AGGREGATE_SUM,
+                            f"{measure.config_field} ({measure.raw_column}): observed in the closed months of the "
+                            f"extract, empty elsewhere (it is only known once the month closes) · SUM"))
     legend = pd.DataFrame(legend_rows, columns=["columna", "paso", "nivel", "como_agregar", "descripcion"])
     return legend[legend["columna"].isin(core.columns)].drop_duplicates("columna").reset_index(drop=True)
 
