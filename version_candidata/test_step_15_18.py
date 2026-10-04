@@ -178,6 +178,21 @@ def test_the_distribution_of_the_marks() -> None:
     check(abs(moved_to_softcancel - 90 * (0.05 / (90 / 120))) < 1e-9,
           "a mark only grows: softcancel already above its final share moves nothing back; only dormant's gap moves")
 
+    saturated = future.copy()                                   # the marks lack more than all that is neutral
+    saturated.loc[saturated[softcancel] == 0, configuration.pipeline_units_col] = 7.0
+    saturated.loc[saturated[softcancel] == 0, configuration.pipeline_usd_col] = 70.0
+    saturated.loc[saturated[softcancel] == 1, configuration.pipeline_units_col] = 93.0
+    saturated.loc[saturated[softcancel] == 1, configuration.pipeline_usd_col] = 930.0
+    for shares in ((0.07, 0.03), (0.0123, 0.0456), (1 / 3, 1 / 7)):
+        history_now = fine_table.copy()
+        is_dormant = history_now[dormant] == 1
+        history_now.loc[is_dormant, configuration.pipeline_units_col] = 100.0 * shares[0] * 3
+        history_now.loc[history_now[softcancel] == 1, configuration.pipeline_units_col] = 100.0 * shares[1]
+        moved = distribute_marks(saturated.drop(columns=[c for c in saturated.columns if c.startswith("maduracion")
+                                                         or c.endswith("_base")]), history_now, configuration)
+        assert moved["maduracion_l"].max() <= 1.0, moved["maduracion_l"].max()
+    check(True, "when the marks lack more than all that is neutral, every neutral unit moves and l is exactly ≤ 1")
+
 
 if __name__ == "__main__":
     test_steps_15_to_18()

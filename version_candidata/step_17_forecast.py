@@ -213,10 +213,13 @@ def assemble_forecast(fine_table: pd.DataFrame, forecast_units: pd.DataFrame, se
                             blocking=False, context=f"{after_renewal}" if after_renewal else "nothing declared")
     if maturation is not None:
         moved_too_much = future[future["maduracion_unidades_migran"] > future[configuration.pipeline_units_col] + 1e-9]
+        share_moved = future["maduracion_l"]
         configuration.log_check(STEP_LABEL, check_log,
                                 "the distribution moves units, it does not create them (moved ≤ units due, l in [0, 1])",
-                                moved_too_much.empty and future["maduracion_l"].between(0, 1).all(),
-                                failure_detail=f"{len(moved_too_much)} rows move more units than they have")
+                                moved_too_much.empty and share_moved.between(0, 1).all(),
+                                failure_detail=f"{len(moved_too_much)} rows move more units than they have · "
+                                               f"l above 1: {int((share_moved > 1).sum())} (largest {share_moved.max():.12f}) · "
+                                               f"l below 0: {int((share_moved < 0).sum())} · l empty: {int(share_moved.isna().sum())}")
 
     # [10] the tables
     configuration.log_action(STEP_LABEL, 10, "writing the forecast, the months, the summary and the maturation")
@@ -379,9 +382,10 @@ def distribute_marks(future: pd.DataFrame, fine_table: pd.DataFrame, configurati
         gap_total = sum(gaps.values())
         if gap_total <= 0:
             continue
-        scale = min(1.0, neutral_today / gap_total)
-        fractions = {combination: gap * scale / neutral_today for combination, gap in gaps.items() if gap > 0}
-        moved_share = sum(fractions.values())
+        # the share of the neutral units that moves: what the marks lack over what is neutral, at most all of it.
+        # Computed once and split by weight (not summed from the parts: a sum of fractions of 1 can round above 1)
+        moved_share = min(gap_total / neutral_today, 1.0)
+        fractions = {combination: moved_share * gap / gap_total for combination, gap in gaps.items() if gap > 0}
         rate_units = rate_usd = 0.0
         for combination, fraction in fractions.items():
             combination_units_rate, combination_usd_rate = combination_rates(keys, combination)
