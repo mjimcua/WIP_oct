@@ -24,3 +24,49 @@ WHERE forecast_universe = 'pipeline'
   AND period IN ('2026-05', '2026-06', '2026-07', '2026-08', '2027-05', '2027-06', '2027-07', '2027-08')
 GROUP BY period, forecast_status
 ORDER BY period;
+
+WITH licences AS (
+    SELECT <tus columnas y dimensiones>,
+           total_tr_units, total_tr_usd, total_renewed_units, total_renewed_usd,
+           total_tr_usd_renewed, total_readquired_units,
+           -- the isolated renewal, ONCE: your condition (softcancel, sku base key, same BU, licence type,
+           -- Retention), with the amounts on the fixed-rate base
+           CASE WHEN <tu condición de softcancel y SKU, con sus paréntesis>
+                 AND total_tr_usd_renewed > 0
+                 AND total_renewed_usd > 0
+                THEN 1 ELSE 0 END                                      AS is_isolated_renewal
+    FROM ...
+),
+licences_with_ratio AS (
+    SELECT licences.*,
+           -- the ratio depends on the flag: it cannot exist outside the isolated renewals
+           CASE WHEN is_isolated_renewal = 1
+                THEN total_renewed_usd / total_tr_usd_renewed END     AS isolated_renewal_ratio
+    FROM licences
+)
+SELECT <tus dimensiones>,
+       SUM(total_tr_units)          AS total_tr_units,
+       SUM(total_tr_usd)            AS total_tr_usd,
+       SUM(total_renewed_units)     AS total_renewed_units,
+       SUM(total_renewed_usd)       AS total_renewed_usd,
+       SUM(total_tr_usd_renewed)    AS total_tr_usd_renewed,
+       SUM(total_readquired_units)  AS total_reacquired_units,
+
+       -- the isolated renewals: renewed units and USD, and what they were worth (fixed rate)
+       SUM(CASE WHEN is_isolated_renewal = 1 THEN total_renewed_units  ELSE 0 END) AS total_renewed_units_without_softcancel,
+       SUM(CASE WHEN is_isolated_renewal = 1 THEN total_renewed_usd    ELSE 0 END) AS total_renewed_usd_without_softcancel,
+       SUM(CASE WHEN is_isolated_renewal = 1 THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_without_softcancel,
+
+       -- the second moment, on the same base
+       SUM(CASE WHEN is_isolated_renewal = 1
+                THEN total_renewed_usd * total_renewed_usd / total_tr_usd_renewed ELSE 0 END) AS total_renewed_usd_sq_over_tr_isolated,
+
+       -- the six bands: what the isolated renewers were worth, by their ratio (they add up to the base above)
+       SUM(CASE WHEN isolated_renewal_ratio <  0.95                                  THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_lt095,
+       SUM(CASE WHEN isolated_renewal_ratio >= 0.95 AND isolated_renewal_ratio < 1.00 THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_095_100,
+       SUM(CASE WHEN isolated_renewal_ratio >= 1.00 AND isolated_renewal_ratio < 1.05 THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_100_105,
+       SUM(CASE WHEN isolated_renewal_ratio >= 1.05 AND isolated_renewal_ratio < 1.10 THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_105_110,
+       SUM(CASE WHEN isolated_renewal_ratio >= 1.10 AND isolated_renewal_ratio < 1.20 THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_110_120,
+       SUM(CASE WHEN isolated_renewal_ratio >= 1.20                                  THEN total_tr_usd_renewed ELSE 0 END) AS total_tr_usd_renewed_isolated_ge120
+FROM licences_with_ratio
+GROUP BY <tus dimensiones>;
