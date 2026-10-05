@@ -491,6 +491,9 @@ class Config:
     price_persistence_months: int = 3             # [15 22] ...this many months in a row is an increase (not noise)
     price_cycle_months: int = 12                  # [22] the effect of an increase lasts one renewal cycle
     price_min_reference_months: int = 6           # [22] fewer previous months: no reference yet, no flag
+    price_group_dims: list = field(default_factory=list)   # [22] the dims a tariff changes by (region levels, product):
+                                                           # every group is watched on its own. Empty = the portfolio
+    price_group_min_renewed_units: float = 100.0  # [22] a group's month with fewer renewals is left out of the detection
     # ─── step 17 · the maturation of the mark ───
     maturation_min_units: float = 100.0           # [17] a cell (or its calendar month) needs this many units to measure itself
     maturation_history_months: int = 12           # [17] the final marks are measured over the last N closed months

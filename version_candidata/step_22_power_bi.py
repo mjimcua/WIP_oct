@@ -8,7 +8,10 @@ That context is built here, once, in Python, instead of as calculated tables or 
 
 Tables written (one per auxiliary table; this step will grow with the report):
 
-  sff_price_increase_monitor     one row per closed pipeline month: the uplift of everyone, the uplift
+  sff_price_increase_calendar    one row per increase detected: price group, start month, size of the
+                                 step, uplift before and during the cycle, the renewed USD it touched
+  sff_price_increase_monitor     one row per PRICE GROUP (price_group_dims: a tariff changes by region and
+                                 product) and closed pipeline month: the uplift of everyone, the uplift
                                  of the ISOLATED renewals (the detector: the normal renewal process, no
                                  retention discounts in it), the step against the average of the previous 12
                                  months, and the increase cycle (a price increase affects the renewals
@@ -40,7 +43,7 @@ Checks (logged as they are made, numbered, at the level of their status):
 import numpy as np
 import pandas as pd
 
-from config import (CORE_ISOLATED_BAND_PREFIX, CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD,
+from config import (CORE_ISOLATED_BAND_PREFIX, join_columns, CORE_ISOLATED_PIPELINE_UNITS, CORE_ISOLATED_RENEWED_PIPELINE_USD,
                     CORE_ISOLATED_RENEWED_UNITS, CORE_ISOLATED_RENEWED_USD, CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR,
                     CORE_RENEWED_PIPELINE_USD, ISOLATED_RATIO_BANDS, Config, parameter_table, weighted_ratio_spread)
 from step_nucleo import FINAL_ORIGIN_COLUMN, TS_WITHOUT_RESULT
@@ -56,7 +59,7 @@ STEP_ACTIONS = ["the table of pipeline sources: code, label, block, order",
                 "the price increase monitor: the uplift of the closed months and its steps",
                 "the parameters of this run: every field of the Config, its value and the steps that read it",
                 "check the tables against the core (checks 1-4)",
-                "write them (checks 5-7)",
+                "write them (checks 5-8)",
                 "count the checks; stop if any failed",
                 "show the tables"]
 STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeline_source) and "
@@ -65,6 +68,7 @@ STEP_OUTPUT = ("tables sff_forecast_pipeline_source (one row per forecast_pipeli
 PIPELINE_SOURCE_TABLE = "forecast_pipeline_source"
 PRICE_MONITOR_TABLE = "price_increase_monitor"
 PARAMETERS_TABLE = "parametros"
+PRICE_CALENDAR_TABLE = "price_increase_calendar"
 
 # the detector of price increases, over the uplift of the isolated renewals (no retention event):
                                # (one noisy month is not an increase; the price of it: a step is confirmed 2 months late)
@@ -108,12 +112,14 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
     configuration.log_action(STEP_LABEL, 1, f"{len(pipeline_source_table)} pipeline sources in "
                                             f"{pipeline_source_table['source_block'].nunique()} blocks")
 
-    # [2] the price increase monitor
+    # [2] the price increase monitor, per price group, and the calendar of the increases it detects
     price_monitor = price_increase_monitor(core_table, configuration)
-    flagged_months = price_monitor[price_monitor["price_increase_flag"] == 1]["period"].tolist()
-    configuration.log_action(STEP_LABEL, 2, f"{len(price_monitor):,} closed pipeline months in the monitor · detector on "
-                                            f"{price_monitor.attrs['detector_series']} · increases flagged: "
-                                            f"{flagged_months if flagged_months else 'none'}")
+    calendar = increase_calendar(price_monitor, configuration)
+    groups = price_monitor["price_group"].nunique()
+    configuration.log_action(STEP_LABEL, 2, f"{groups:,} price groups ({', '.join(configuration.price_group_dims) or 'the portfolio'}) "
+                                            f"× {price_monitor['period'].nunique()} closed months · detector on "
+                                            f"{price_monitor.attrs['detector_series']} · {len(calendar)} increases detected in "
+                                            f"{calendar['price_group'].nunique() if len(calendar) else 0} groups")
 
     # [3] the parameters of this run
     parameters = parameter_table(configuration)
@@ -157,6 +163,7 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
     configuration.log_action(STEP_LABEL, 5, "writing the tables")
     configuration.write_table(STEP_LABEL, check_log, pipeline_source_table, PIPELINE_SOURCE_TABLE)
     configuration.write_table(STEP_LABEL, check_log, price_monitor.drop(columns=["renewed_units"]), PRICE_MONITOR_TABLE)
+    configuration.write_table(STEP_LABEL, check_log, calendar, PRICE_CALENDAR_TABLE)
     configuration.write_table(STEP_LABEL, check_log, parameters, PARAMETERS_TABLE)
 
     # [6] the count
@@ -167,11 +174,24 @@ def build_power_bi_tables(core_table: pd.DataFrame, configuration: Config) -> di
     configuration.log_action(STEP_LABEL, 7, "the pipeline sources, as Power BI will show them, the last 13 months of the "
                                             "price increase monitor, and the parameters of this run by step:")
     configuration.show_table(pipeline_source_table)
-    configuration.show_table(price_monitor.drop(columns=["renewed_units"]).tail(13))
+    configuration.logger.doc(f"[{STEP_LABEL}] ══════════ CALENDARIO DE SUBIDAS DETECTADAS ══════════")
+    configuration.logger.doc(f"[{STEP_LABEL}] por grupo de precio ({', '.join(configuration.price_group_dims) or 'cartera'}): un "
+                             f"escalón ≥ {configuration.price_step_threshold:.0%} frente a sus 12 meses previos, mantenido "
+                             f"{configuration.price_persistence_months} meses, en meses con ≥ "
+                             f"{configuration.price_group_min_renewed_units:,.0f} renovaciones; las 30 de más valor:")
+    if len(calendar):
+        shown_calendar = calendar.head(30).copy()
+        for column_name in ["escalon", "uplift_antes", "uplift_ciclo"]:
+            shown_calendar[column_name] = shown_calendar[column_name].round(3)
+        shown_calendar["usd_renovado_ciclo"] = shown_calendar["usd_renovado_ciclo"].round(0)
+        configuration.show_table(shown_calendar.drop(columns=["price_group"]))
+    else:
+        configuration.logger.doc(f"[{STEP_LABEL}] no increase detected in any group")
+    configuration.logger.doc(f"[{STEP_LABEL}] ══════════ FIN DEL CALENDARIO DE SUBIDAS ══════════")
     configuration.show_table(parameters[["parametro", "valor", "por_defecto", "cambiado", "pasos"]])
 
     return {"pipeline_source": pipeline_source_table, "price_monitor": price_monitor.drop(columns=["renewed_units"]),
-            "parameters": parameters}
+            "price_calendar": calendar, "parameters": parameters}
 
 
 
@@ -208,10 +228,17 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
     if CORE_ISOLATED_RENEWED_UNITS in present:
         closed["_base_aproximada_isolated"] = closed[CORE_ISOLATED_RENEWED_UNITS] * closed["_precio_fila"]
 
-    summed = closed.groupby("period").sum(numeric_only=True)
+    # the price groups: a tariff changes by region and product, so every group is watched on its own
+    group_dims = [column_name for column_name in configuration.price_group_dims if column_name in closed.columns]
+    closed["price_group"] = join_columns(closed, group_dims) if group_dims else "cartera"
+    dims_of_group = (closed.drop_duplicates("price_group").set_index("price_group")[group_dims]
+                     if group_dims else pd.DataFrame(index=pd.Index(["cartera"], name="price_group")))
+    summed = closed.groupby(["price_group", "period"]).sum(numeric_only=True)
     monitor = pd.DataFrame(index=summed.index)
     monitor["renewed_units"] = summed["forecast_renewed_units"]
     uplift_base = summed[CORE_RENEWED_PIPELINE_USD] if CORE_RENEWED_PIPELINE_USD in present else summed["_base_aproximada"]
+    monitor["renewed_USD"] = summed["forecast_renewed_USD"]          # the two sums, so Power BI can add groups up
+    monitor["uplift_base_USD"] = uplift_base
     monitor["uplift"] = summed["forecast_renewed_USD"] / uplift_base.where(uplift_base > 0)
 
     # the isolated renewals: each metric with the columns it needs, and nothing else
@@ -243,16 +270,34 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
         high = summed[band_columns["110_120"]] + summed[band_columns["ge120"]]
         monitor["share_isolated_near_100"] = near / band_total.where(band_total > 0)
         monitor["share_isolated_ge110"] = high / band_total.where(band_total > 0)
-    monitor = monitor.sort_index().reset_index()
 
-    # the detector: the chosen series against the average of its previous 12 months
+    # the detector: per price group, the chosen series against the average of its previous 12 months; a month
+    # with too few renewals in its group is noise, not a price: it is left out of the detection
     detector_series = "uplift_isolated" if monitor["uplift_isolated"].notna().any() else "uplift"
-    detector = monitor[detector_series]
-    monitor["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=configuration.price_min_reference_months).mean()
-    monitor["uplift_step"] = detector / monitor["uplift_previous_12"] - 1
-    above = ((monitor["uplift_step"] >= configuration.price_step_threshold) & monitor["uplift_previous_12"].notna()).to_numpy()
-    monitor["above_threshold"] = above.astype(int)
-    flags = np.zeros(len(monitor), dtype=int)
+    # the volume of the detector: the isolated renewals when it reads them and they are there, every renewal otherwise
+    volume = (summed[CORE_ISOLATED_RENEWED_UNITS] if detector_series == "uplift_isolated" and CORE_ISOLATED_RENEWED_UNITS in present
+              else summed["forecast_renewed_units"])
+    monitor["volumen_detector"] = volume.to_numpy()
+    monitor["detector"] = monitor[detector_series].where(monitor["volumen_detector"] >= configuration.price_group_min_renewed_units)
+    monitor = monitor.reset_index().sort_values(["price_group", "period"]).reset_index(drop=True)
+    detected = [detect_increases(group_rows, configuration) for _, group_rows in monitor.groupby("price_group", sort=False)]
+    monitor = pd.concat(detected).sort_index()
+    monitor = monitor.merge(dims_of_group.reset_index(), on="price_group", how="left")
+    monitor.attrs["detector_series"] = detector_series
+    return monitor
+
+
+def detect_increases(group_rows: pd.DataFrame, configuration: Config) -> pd.DataFrame:
+    """The detection of one price group, month by month (its rows sorted by period): the step against the
+    average of its previous 12 months, the months above the threshold, the increases (a run of
+    price_persistence_months above it starts one), the cycle and the months since the increase."""
+    rows = group_rows.copy()
+    detector = rows["detector"]
+    rows["uplift_previous_12"] = detector.shift(1).rolling(window=12, min_periods=configuration.price_min_reference_months).mean()
+    rows["uplift_step"] = detector / rows["uplift_previous_12"] - 1
+    above = ((rows["uplift_step"] >= configuration.price_step_threshold) & rows["uplift_previous_12"].notna()).to_numpy()
+    rows["above_threshold"] = above.astype(int)
+    flags = np.zeros(len(rows), dtype=int)
     position = 0
     while position < len(above):
         if not above[position]:
@@ -264,18 +309,40 @@ def price_increase_monitor(core_table: pd.DataFrame, configuration: Config) -> p
         if run_end - position >= configuration.price_persistence_months:
             flags[position] = 1                      # the increase starts where the run starts
         position = run_end
-    monitor["price_increase_flag"] = flags
-    monitor["in_increase_cycle"] = (monitor["price_increase_flag"].rolling(window=configuration.price_cycle_months, min_periods=1)
-                                    .max().astype(int))
-    months_since = []
-    last_flagged_position = None
-    for position, flagged in enumerate(monitor["price_increase_flag"]):
+    rows["price_increase_flag"] = flags
+    rows["in_increase_cycle"] = (rows["price_increase_flag"].rolling(window=configuration.price_cycle_months, min_periods=1)
+                                 .max().astype(int).to_numpy())
+    months_since, last_flagged_position = [], None
+    for position, flagged in enumerate(rows["price_increase_flag"]):
         if flagged:
             last_flagged_position = position
         months_since.append(position - last_flagged_position if last_flagged_position is not None else np.nan)
-    monitor["months_since_increase"] = months_since
-    monitor.attrs["detector_series"] = detector_series
-    return monitor
+    rows["months_since_increase"] = months_since
+    return rows
+
+
+def increase_calendar(monitor: pd.DataFrame, configuration: Config) -> pd.DataFrame:
+    """The increases detected, one row per price group and start month: its size (the step), the uplift
+    before (the previous 12 months) and during the cycle, the months of the cycle already seen and the
+    renewed USD in them (what the increase touched), biggest first."""
+    rows = []
+    for _, start in monitor[monitor["price_increase_flag"] == 1].iterrows():
+        same_group = monitor[monitor["price_group"] == start["price_group"]]
+        in_cycle = same_group[(same_group["period"] >= start["period"])
+                              & (same_group["period"] < start["period"] + configuration.price_cycle_months)]
+        row = {"price_group": start["price_group"], "inicio": start["period"],
+               "escalon": start["uplift_step"], "uplift_antes": start["uplift_previous_12"],
+               "uplift_ciclo": in_cycle["detector"].mean(), "meses_vistos": int(in_cycle["detector"].notna().sum()),
+               "usd_renovado_ciclo": in_cycle["renewed_USD"].sum()}
+        for column_name in configuration.price_group_dims:
+            if column_name in start.index:
+                row[column_name] = start[column_name]
+        rows.append(row)
+    columns = (["price_group", "inicio"] + [c for c in configuration.price_group_dims if c in monitor.columns]
+               + ["escalon", "uplift_antes", "uplift_ciclo", "meses_vistos", "usd_renovado_ciclo"])
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows)[columns].sort_values("usd_renovado_ciclo", ascending=False).reset_index(drop=True)
 
 def build_pipeline_source_table() -> pd.DataFrame:
     """One row per pipeline source: code, business label, block and order."""

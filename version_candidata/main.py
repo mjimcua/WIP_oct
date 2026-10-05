@@ -105,6 +105,8 @@ def production_configuration() -> Config:
         acquisition_values=["Acquisition_Not-New", "Acquisition_Pure-New"],
         renewed_acquisition_value="Retention_Not-New",      # an acquisition that renews: its next due date is a retention
         dims_after_renewal={"prev_OperationGroup": "Renewal"},   # after renewing, the previous operation is the renewal
+        # a tariff changes by region (its three levels) and product: the price increases are detected per group
+        price_group_dims=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3", "tr_product_level_1"],
         acquisition_discount=0.4,
         # the time_series universe (retail to subscription): its region and its projection
         ts_region_columns=["tr_regional_level_1", "tr_regional_level_2", "tr_regional_level_3"],   # projected by country
@@ -145,6 +147,7 @@ def synthetic_configuration() -> Config:
         acquisition_column="newcust",
         acquisition_values=[1],
         renewed_acquisition_value=0,
+        price_group_dims=["region", "product"],
     )
 
 

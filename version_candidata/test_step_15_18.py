@@ -193,6 +193,25 @@ def test_the_distribution_of_the_marks() -> None:
         assert moved["maduracion_l"].max() <= 1.0, moved["maduracion_l"].max()
     check(True, "when the marks lack more than all that is neutral, every neutral unit moves and l is exactly ≤ 1")
 
+    # a fresh cohort: dormant today 40 % (final 5 %), softcancel and dormant+softcancel below their final share
+    history_both = []
+    for month in pd.period_range("2025-09", "2026-08", freq="M"):
+        for marks_on, units in (({}, 75.0), ({softcancel: 1}, 10.0), ({dormant: 1}, 5.0), ({dormant: 1, softcancel: 1}, 10.0)):
+            history_both.append({**base_row, **marks_on, configuration.period_col: month, CALENDAR_ROLE_COLUMN: TRUTH_ROLES[0],
+                                 configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10,
+                                 configuration.renewed_units_col: units * 0.5, configuration.renewed_usd_col: units * 5})
+    fresh = pd.DataFrame([{**base_row, **marks_on, configuration.period_col: target, PIPELINE_ORIGIN_COLUMN: PIPELINE_REAL,
+                           configuration.pipeline_units_col: units, configuration.pipeline_usd_col: units * 10, "h": 11,
+                           "tasa": 0.7, "uplift": 1.0, "esperado_unidades": units * 0.7, "esperado_usd": units * 7.0,
+                           "esperado_usd_bajo": units * 6.0, "esperado_usd_alto": units * 8.0}
+                          for marks_on, units in (({}, 60.0), ({dormant: 1}, 40.0))])
+    fresh_adjusted = distribute_marks(fresh, pd.DataFrame(history_both), configuration)
+    fresh_table = distribution_table(fresh_adjusted, configuration)
+    check(abs(fresh_table.iloc[0][f"{dormant}_esperado"] - 0.40) < 1e-12
+          and abs(fresh_table.iloc[0][f"{softcancel}_esperado"] - 0.10) < 1e-12,
+          "a mark above its final share (dormant 40 % vs 15 %) does not grow through dormant+softcancel; softcancel "
+          "alone still reaches its 10 %")
+
 
 if __name__ == "__main__":
     test_steps_15_to_18()

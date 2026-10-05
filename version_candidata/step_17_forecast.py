@@ -297,7 +297,9 @@ def distribute_marks(future: pd.DataFrame, fine_table: pd.DataFrame, configurati
                               maturation_history_months closed months (there the marks are final): of the
                               group; with fewer than maturation_min_units, of its mandatory cell; with fewer
                               still, of the whole portfolio
-               the gap        final share − today's share of every marked combination, when positive
+               the gap        final share − today's share of every marked combination, when positive; and
+                            no mark ends above its own final share through a combination (a mark already
+                            above it, like dormant in a fresh cohort, does not grow inside another one)
                the move       the neutral units of the group move to every marked combination in proportion
                               to its gap (never more than the neutral units there are)
              The units moved renew at the rate of their destination combination in the history (same levels;
@@ -377,8 +379,22 @@ def distribute_marks(future: pd.DataFrame, fine_table: pd.DataFrame, configurati
         total = mix_total[level].get((keys[level], month.month), 0.0)
         if total <= 0:
             continue
-        gaps = {combination: max(mix_units[level].get((keys[level], month.month, combination), 0.0) / total
-                                 - today.get(combination, 0.0), 0.0) for combination in marked_combinations}
+        final_share = {combination: mix_units[level].get((keys[level], month.month, combination), 0.0) / total
+                       for combination in marked_combinations}
+        gaps = {combination: max(final_share[combination] - today.get(combination, 0.0), 0.0)
+                for combination in marked_combinations}
+        # no mark may end above its own final share through a combination: dormant already above its final
+        # share (a fresh cohort) must not grow again inside dormant+softcancel. Per mark, what may still be
+        # added is its final share minus today's; the combinations that carry it are scaled down to fit
+        for mark in marks:
+            carrying = [combination for combination in marked_combinations if mark in combination.split("+")]
+            allowed = max(sum(final_share[combination] for combination in carrying)
+                          - sum(today.get(combination, 0.0) for combination in carrying), 0.0)
+            added = sum(gaps[combination] for combination in carrying)
+            if added > allowed:
+                scale_down = allowed / added
+                for combination in carrying:
+                    gaps[combination] *= scale_down
         gap_total = sum(gaps.values())
         if gap_total <= 0:
             continue

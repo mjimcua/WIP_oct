@@ -118,6 +118,11 @@ PENDIENTE DE REVISAR CON DATOS REALES: en el log del paso 17 (acción 6), las fi
 - El forecast predice ya, además de la tasa y la revalorización, la proporción de las marcas negativas que llegarán antes de vencer (softcancel, dormant, not_installed): el reparto (acción 7 del paso 17) mueve unidades de neutral a cada combinación marcada hasta la mezcla histórica del mismo mes, por grupo (todas las dimensiones salvo las timevarying), con recurso a la celda mandatory y a la cartera. Una marca solo crece (el extracto guarda el último estado). Sin backtest: la técnica es la del mismo mes del año anterior, como la adquisición; se sustituirá por modelos predictivos.
 - A pensar: unificar en un solo componente las proyecciones "mismo mes de la historia × nivel" (adquisición simulada, universo time_series, reparto de marcas), que hoy son tres implementaciones de la misma técnica.
 
+## Subidas de precio por grupo y tope del reparto (4-oct-2026)
+- Las tarifas cambian por región (3 niveles) y producto (level_1): el detector del paso 22 trabaja por grupo de precio y escribe el calendario de subidas detectadas (`sff_price_increase_calendar`), para contrastarlo con el real. Siguiente: el uplift de cada celda sin las subidas pasadas de su grupo, y las futuras como escenario declarado.
+- El reparto de marcas no deja que una marca supere su proporción final a través de una combinación (dormant en las cohortes recientes).
+- Pendiente del extracto: tramos y momento isolated con la misma condición que la base (118.137 filas descuadradas).
+
 ## Mejoras para la versión final
 - Renumerar los pasos para que número = orden de ejecución (hoy: 17 → NU → 19 → 20 → 18 → IN).
 

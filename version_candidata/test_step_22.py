@@ -35,8 +35,9 @@ def test_the_monitor_over_the_synthetic() -> None:
     one_month = monitor["period"].iloc[-1]
     of_the_month = closed[closed["period"].astype(str) == str(one_month)]
     by_hand = of_the_month["forecast_renewed_USD"].sum() / of_the_month["forecast_to_renew_USD_renewed"].sum()
-    check(abs(float(monitor.loc[monitor["period"] == one_month, "uplift"].iloc[0]) - by_hand) < 1e-9,
-          "the uplift of a month = Σ renewed USD / Σ exact base, summed over the closed pipeline rows of the core")
+    month_rows = monitor[monitor["period"] == one_month]
+    check(abs(float(month_rows["renewed_USD"].sum() / month_rows["uplift_base_USD"].sum()) - by_hand) < 1e-9,
+          "the uplift of a month = Σ renewed USD / Σ exact base: adding up its price groups gives the portfolio's")
 
 
 def test_the_detection_over_a_hand_made_core() -> None:
@@ -50,7 +51,7 @@ def test_the_detection_over_a_hand_made_core() -> None:
                      "forecast_to_renew_units": 100.0, "forecast_to_renew_USD": 1000.0,
                      "forecast_renewed_units": 70.0, "forecast_renewed_USD": 70.0 * 10.0 * uplift,
                      "forecast_to_renew_USD_renewed": 700.0})
-    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with())
+    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with(price_group_min_renewed_units=0))
     check(monitor.attrs["detector_series"] == "uplift" and monitor["uplift_isolated"].isna().all(),
           "without the isolated renewals the detector falls back to the plain uplift, and says so")
     check(monitor["uplift_previous_12"].isna().sum() == synthetic_with().price_min_reference_months,
@@ -69,7 +70,7 @@ def test_the_detection_over_a_hand_made_core() -> None:
     noisy = pd.DataFrame(rows)
     spike_month = pd.Period("2024-06", freq="M")
     noisy.loc[noisy["period"] == spike_month, "forecast_renewed_USD"] *= 1.06     # ONE month 6 % up, then back
-    noisy_monitor = price_increase_monitor(noisy, synthetic_with())
+    noisy_monitor = price_increase_monitor(noisy, synthetic_with(price_group_min_renewed_units=0))
     spike = noisy_monitor[noisy_monitor["period"] == spike_month].iloc[0]
     check(spike["above_threshold"] == 1 and spike["price_increase_flag"] == 0
           and noisy_monitor.loc[noisy_monitor["period"] < step_starts, "in_increase_cycle"].sum() == 0,
@@ -95,7 +96,7 @@ def test_the_dispersion_of_the_isolated_renewals() -> None:
                CORE_ISOLATED_RENEWED_PIPELINE_USD: base, CORE_ISOLATED_RENEWED_USD_SQ_OVER_TR: second_moment}
         row.update({CORE_ISOLATED_BAND_PREFIX + short_name: value for short_name, value in bands.items()})
         rows.append(row)
-    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with())
+    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with(price_group_min_renewed_units=0))
     check([round(value, 6) for value in monitor["desv_isolated"]] == [0.1, 0.0],
           "two licences at 1.00 and 1.20: std 0.10; two at 1.10: std 0 (same mean, the moment tells them apart)")
     check([round(value, 6) for value in monitor["share_isolated_ge110"]] == [0.5, 1.0]
@@ -111,11 +112,40 @@ def test_each_isolated_metric_needs_only_its_columns() -> None:
              "forecast_renewed_units": 70.0, "forecast_renewed_USD": 735.0,
              CORE_ISOLATED_RENEWED_UNITS: 60.0, CORE_ISOLATED_RENEWED_USD: 618.0,
              CORE_ISOLATED_RENEWED_PIPELINE_USD: 600.0} for month in months]           # no isolated units due
-    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with())
+    monitor = price_increase_monitor(pd.DataFrame(rows), synthetic_with(price_group_min_renewed_units=0))
     check(monitor.attrs["detector_series"] == "uplift_isolated" and (monitor["uplift_isolated"].round(6) == 1.03).all(),
           "the isolated uplift = Σ isolated renewed USD / Σ its exact base, and the detector runs on it")
     check(monitor["rate_units_isolated"].isna().all() and monitor["share_due_isolated"].isna().all(),
           "the metrics that need the isolated units due stay empty, and nothing else does")
+
+
+def test_the_increases_are_detected_per_price_group() -> None:
+    print("G · a tariff changes by region and product: the detection runs per price group")
+    from step_22_power_bi import increase_calendar
+    configuration = synthetic_with()
+    rows = []
+    for region, step_month in (("EU", pd.Period("2025-03", freq="M")), ("RU", None)):
+        for month in pd.period_range("2023-01", periods=48, freq="M"):     # the whole cycle of the step is seen
+            uplift = 1.155 if step_month is not None and step_month <= month < step_month + 12 else 1.10
+            rows.append({"forecast_status": "actual", "forecast_universe": "pipeline", "period": month,
+                         "region": region, "product": "A",
+                         "forecast_to_renew_units": 300.0, "forecast_to_renew_USD": 3000.0,
+                         "forecast_renewed_units": 210.0, "forecast_renewed_USD": 210.0 * 10.0 * uplift,
+                         "forecast_to_renew_USD_renewed": 2100.0})
+    monitor = price_increase_monitor(pd.DataFrame(rows), configuration)
+    calendar = increase_calendar(monitor, configuration)
+    check(monitor["price_group"].nunique() == 2 and len(calendar) == 1 and calendar.iloc[0]["region"] == "EU"
+          and str(calendar.iloc[0]["inicio"]) == "2025-03" and round(float(calendar.iloc[0]["escalon"]), 3) == 0.05,
+          "two groups: the one with a +5 % step in 2025-03 is in the calendar, with its size; the other is not")
+    europe = monitor[monitor["region"] == "EU"]
+    check(int(europe["in_increase_cycle"].sum()) == configuration.price_cycle_months
+          and int(monitor[monitor["region"] == "RU"]["in_increase_cycle"].sum()) == 0,
+          "the cycle belongs to its group: 12 months in EU, none in RU")
+    small = pd.DataFrame(rows)
+    small.loc[small["region"] == "EU", ["forecast_renewed_units", "forecast_renewed_USD", "forecast_to_renew_USD_renewed"]] /= 10
+    quiet = increase_calendar(price_increase_monitor(small, configuration), configuration)
+    check(len(quiet) == 0, f"a group with fewer than {configuration.price_group_min_renewed_units:.0f} renewals a month is "
+                           f"left out of the detection: its step is noise, not a price")
 
 
 def test_every_parameter_is_in_the_config() -> None:
@@ -147,5 +177,6 @@ if __name__ == "__main__":
     test_the_detection_over_a_hand_made_core()
     test_each_isolated_metric_needs_only_its_columns()
     test_the_dispersion_of_the_isolated_renewals()
+    test_the_increases_are_detected_per_price_group()
     test_every_parameter_is_in_the_config()
     finish()

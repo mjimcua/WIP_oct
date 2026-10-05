@@ -140,9 +140,11 @@ def contracts(configuration: Config) -> dict:
         "forecast_series": [TableContract("forecast_series", "forecast series", ("s03_fs_id",), ())],
         "power_bi": [TableContract("power_bi.pipeline_source", "forecast pipeline source", ("forecast_pipeline_source",),
                                    ("source_label", "source_block", "source_order"), part="pipeline_source"),
-                     TableContract("power_bi.price_monitor", "closed pipeline month", ("period",),
+                     TableContract("power_bi.price_monitor", "price group and closed pipeline month", ("price_group", "period"),
                                    ("uplift", "uplift_step", "price_increase_flag", "in_increase_cycle"),
                                    part="price_monitor"),
+                     TableContract("power_bi.price_calendar", "increase detected", ("price_group", "inicio"),
+                                   ("escalon", "uplift_antes", "usd_renovado_ciclo"), part="price_calendar"),
                      TableContract("power_bi.parameters", "parameter of the Config", ("parametro",),
                                    ("valor", "por_defecto", "cambiado", "pasos"), part="parameters")],
     }
